@@ -1,0 +1,11 @@
+.history
+*.pyc
+venv_1/*
+.vscode
+data/*/counterfactual.csv
+data/*/factual.csv
+data/*/explainer.pkl
+data/*/logs/*
+__pycache__/
+.claude/
+Results/

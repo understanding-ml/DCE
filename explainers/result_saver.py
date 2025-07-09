@@ -1,0 +1,279 @@
+import os
+import json
+import pickle
+import pandas as pd
+import torch
+from datetime import datetime
+
+
+class ResultSaver:
+    """
+    A class to handle saving experiment results, metadata, and visualizations.
+    Separated from the main explainer to keep the code clean and modular.
+    """
+    
+    def __init__(self):
+        self.save_dir = None
+        self.dataset_name = None
+        self.model_name = None
+        self.strategy_name = None
+        self.seed = None
+        self.full_dce_params = {}
+        self.full_strategy_params = {}
+        
+    def setup_save_directory(self, dataset_name, model_name, strategy, n_proj, delta, U_1, U_2, l, r, max_iter, top_k, seed):
+        """Setup nested directory structure for saving results"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Get strategy name and parameters
+        strategy_name = strategy.__class__.__name__.replace('Strategy', '')
+        
+        # Get strategy-specific parameters with abbreviations
+        strategy_params = []
+        
+        # GeneticStrategy parameters
+        if hasattr(strategy, 'crossover_prob'):
+            strategy_params.append(f"cp={strategy.crossover_prob}")
+        if hasattr(strategy, 'gene_swap_prob'):
+            strategy_params.append(f"gsp={strategy.gene_swap_prob}")
+        if hasattr(strategy, 'mutation_prob_cat'):
+            strategy_params.append(f"mpc={strategy.mutation_prob_cat}")
+        if hasattr(strategy, 'mutation_prob_cont'):
+            strategy_params.append(f"mpo={strategy.mutation_prob_cont}")
+        if hasattr(strategy, 'mutation_noise_scale'):
+            strategy_params.append(f"mns={strategy.mutation_noise_scale}")
+        
+        # SimulatedAnnealingStrategy parameters
+        if hasattr(strategy, 'T0'):
+            strategy_params.append(f"T0={strategy.T0}")
+        if hasattr(strategy, 'T_final'):
+            strategy_params.append(f"Tf={strategy.T_final}")
+        if hasattr(strategy, 'temp_decay'):
+            strategy_params.append(f"td={strategy.temp_decay}")
+        
+        # ParticleSwarmOptimizationStrategy parameters
+        if hasattr(strategy, 'swarm_size'):
+            strategy_params.append(f"swarm={strategy.swarm_size}")
+        if hasattr(strategy, 'w'):
+            strategy_params.append(f"w={strategy.w}")
+        if hasattr(strategy, 'c1'):
+            strategy_params.append(f"c1={strategy.c1}")
+        if hasattr(strategy, 'c2'):
+            strategy_params.append(f"c2={strategy.c2}")
+        
+        # DifferentialEvolutionStrategy parameters
+        if hasattr(strategy, 'F'):
+            strategy_params.append(f"F={strategy.F}")
+        if hasattr(strategy, 'CR'):
+            strategy_params.append(f"CR={strategy.CR}")
+        
+        # CovarianceMatrixAdaptationEvolutionStrategy parameters
+        if hasattr(strategy, 'population_size'):
+            strategy_params.append(f"pop={strategy.population_size}")
+        if hasattr(strategy, 'sigma_decay'):
+            strategy_params.append(f"sd={strategy.sigma_decay}")
+        
+        strategy_param_str = ",".join(strategy_params) if strategy_params else "default"
+        
+        # DCE parameters with abbreviations
+        dce_params = f"np={n_proj},d={delta},u1={U_1},u2={U_2},l={l},r={r},mi={max_iter},tk={top_k}"
+        
+        # Create nested directory structure under Results folder
+        save_path = os.path.join(
+            "Results",
+            dataset_name or "unknown_dataset",
+            model_name or "unknown_model", 
+            f"DCE_{dce_params}",
+            f"{strategy_name}_{strategy_param_str}",
+            f"seed_{seed}_{timestamp}"
+        )
+        
+        # Create directory if it doesn't exist
+        os.makedirs(save_path, exist_ok=True)
+        print(f"Results will be saved to: {save_path}")
+        
+        # Store parameters for later use
+        self.save_dir = save_path
+        self.dataset_name = dataset_name
+        self.model_name = model_name
+        self.strategy_name = strategy_name
+        self.seed = seed
+        self.full_dce_params = {
+            'n_proj': n_proj, 'delta': delta, 'U_1': U_1, 'U_2': U_2,
+            'l': l, 'r': r, 'max_iter': max_iter, 'top_k': top_k
+        }
+        self.full_strategy_params = self._get_strategy_params_dict(strategy)
+        
+        return save_path
+    
+    def _get_strategy_params_dict(self, strategy):
+        """Get full strategy parameters dictionary"""
+        params = {}
+        
+        # GeneticStrategy parameters
+        if hasattr(strategy, 'crossover_prob'):
+            params['crossover_prob'] = strategy.crossover_prob
+        if hasattr(strategy, 'gene_swap_prob'):
+            params['gene_swap_prob'] = strategy.gene_swap_prob
+        if hasattr(strategy, 'mutation_prob_cat'):
+            params['mutation_prob_cat'] = strategy.mutation_prob_cat
+        if hasattr(strategy, 'mutation_prob_cont'):
+            params['mutation_prob_cont'] = strategy.mutation_prob_cont
+        if hasattr(strategy, 'mutation_noise_scale'):
+            params['mutation_noise_scale'] = strategy.mutation_noise_scale
+        
+        # SimulatedAnnealingStrategy parameters
+        if hasattr(strategy, 'T0'):
+            params['T0'] = strategy.T0
+        if hasattr(strategy, 'T_final'):
+            params['T_final'] = strategy.T_final
+        if hasattr(strategy, 'temp_decay'):
+            params['temp_decay'] = strategy.temp_decay
+        
+        # ParticleSwarmOptimizationStrategy parameters
+        if hasattr(strategy, 'swarm_size'):
+            params['swarm_size'] = strategy.swarm_size
+        if hasattr(strategy, 'w'):
+            params['w'] = strategy.w
+        if hasattr(strategy, 'c1'):
+            params['c1'] = strategy.c1
+        if hasattr(strategy, 'c2'):
+            params['c2'] = strategy.c2
+        
+        # DifferentialEvolutionStrategy parameters
+        if hasattr(strategy, 'F'):
+            params['F'] = strategy.F
+        if hasattr(strategy, 'CR'):
+            params['CR'] = strategy.CR
+        
+        # CovarianceMatrixAdaptationEvolutionStrategy parameters
+        if hasattr(strategy, 'population_size'):
+            params['population_size'] = strategy.population_size
+        if hasattr(strategy, 'sigma_decay'):
+            params['sigma_decay'] = strategy.sigma_decay
+        
+        return params
+    
+    def save_results(self, explainer, columns):
+        """Save all results to the designated directory"""
+        if not self.save_dir:
+            print("Warning: save_dir not set, skipping save")
+            return
+            
+        try:
+            # Create visualization subfolder
+            viz_dir = os.path.join(self.save_dir, "visualizations")
+            os.makedirs(viz_dir, exist_ok=True)
+            print(f"📁 Visualization directory ensured: {viz_dir}")
+            
+            # Save ML model
+            if hasattr(explainer.model, 'model'):
+                model_path = os.path.join(self.save_dir, "model.pkl")
+                with open(model_path, 'wb') as f:
+                    pickle.dump(explainer.model.model, f)
+                print(f"Model saved to: {model_path}")
+            
+            # X_init no longer saved - can be regenerated from seed
+            
+            # Save best Q and corresponding x,y as CSV (standardized data only)
+            if hasattr(explainer, 'best_X') and hasattr(explainer, 'best_y'):
+                best_x_df = pd.DataFrame(explainer.best_X.detach().cpu().numpy(), columns=columns)
+                best_y_df = pd.DataFrame(explainer.best_y.detach().cpu().numpy(), columns=['y'])
+                best_q_df = pd.DataFrame([{'Q': explainer.best_Q}])
+                
+                # Save standardized data as best_x.csv
+                best_x_df.to_csv(os.path.join(self.save_dir, "best_x.csv"), index=False)
+                best_y_df.to_csv(os.path.join(self.save_dir, "best_y.csv"), index=False)
+                best_q_df.to_csv(os.path.join(self.save_dir, "best_q.csv"), index=False)
+                    
+                print(f"Best results saved to: {self.save_dir}")
+            
+            # Save final round Q and corresponding x,y as CSV (standardized data only)
+            if hasattr(explainer, 'final_X') and hasattr(explainer, 'final_y'):
+                final_x_df = pd.DataFrame(explainer.final_X.detach().cpu().numpy(), columns=columns)
+                final_y_df = pd.DataFrame(explainer.final_y.detach().cpu().numpy(), columns=['y'])
+                final_q_df = pd.DataFrame([{'Q': explainer.final_Q}])
+                
+                # Save standardized data as final_x.csv
+                final_x_df.to_csv(os.path.join(self.save_dir, "final_x.csv"), index=False)
+                final_y_df.to_csv(os.path.join(self.save_dir, "final_y.csv"), index=False)
+                final_q_df.to_csv(os.path.join(self.save_dir, "final_q.csv"), index=False)
+                    
+                print(f"Final results saved to: {self.save_dir}")
+            
+            # Save logger info as pandas DataFrame and convert to CSV
+            if hasattr(explainer, 'logger_data') and explainer.logger_data:
+                logger_df = pd.DataFrame(explainer.logger_data)
+                logger_df.to_csv(os.path.join(self.save_dir, "optimization_log.csv"), index=False)
+                print(f"Optimization log saved to: {self.save_dir}")
+            
+            # Save experiment metadata with full parameter details
+            metadata = {
+                'dataset_name': self.dataset_name or 'unknown',
+                'model_name': self.model_name or 'unknown',
+                'strategy': self.strategy_name or 'unknown',
+                'seed': self.seed,
+                'timestamp': datetime.now().isoformat(),
+                'found_feasible_solution': explainer.found_feasible_solution,
+                'best_iter': getattr(explainer, 'best_iter', None),
+                'total_iterations': len(explainer.logger_data) if hasattr(explainer, 'logger_data') else 0,
+                'visualization_dir': viz_dir,
+                'dce_parameters': self.full_dce_params,
+                'strategy_parameters': self.full_strategy_params,
+                'parameter_abbreviations': {
+                    'dce_abbrev': {
+                        'np': 'n_proj', 'd': 'delta', 'u1': 'U_1', 'u2': 'U_2',
+                        'l': 'l', 'r': 'r', 'mi': 'max_iter', 'tk': 'top_k'
+                    },
+                    'strategy_abbrev': {
+                        'cp': 'crossover_prob', 'gsp': 'gene_swap_prob', 'mpc': 'mutation_prob_cat',
+                        'mpo': 'mutation_prob_cont', 'mns': 'mutation_noise_scale', 'T0': 'T0',
+                        'Tf': 'T_final', 'td': 'temp_decay', 'swarm': 'swarm_size', 'w': 'w',
+                        'c1': 'c1', 'c2': 'c2', 'F': 'F', 'CR': 'CR', 'pop': 'population_size',
+                        'sd': 'sigma_decay'
+                    }
+                }
+            }
+            
+            with open(os.path.join(self.save_dir, "metadata.json"), 'w') as f:
+                json.dump(metadata, f, indent=2)
+                
+            print(f"All results successfully saved to: {self.save_dir}")
+            print(f"Visualizations will be saved to: {viz_dir}")
+            
+        except Exception as e:
+            print(f"Error saving results: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _recover_data(self, df, columns, data):
+        """Recover data from normalized form"""
+        try:
+            # Create a copy to avoid modifying the original
+            recovered_df = df.copy()
+            
+            # Only apply recovery if we have the necessary attributes
+            if hasattr(data, 'mean') and hasattr(data, 'std'):
+                # Convert to numpy if it's a tensor
+                if hasattr(data.mean, 'numpy'):
+                    mean_vals = data.mean.numpy()
+                    std_vals = data.std.numpy()
+                else:
+                    mean_vals = data.mean
+                    std_vals = data.std
+                
+                # Apply inverse normalization: x_original = x_normalized * std + mean
+                for i, col in enumerate(columns):
+                    if i < len(mean_vals) and i < len(std_vals):
+                        recovered_df[col] = df[col] * std_vals[i] + mean_vals[i]
+            
+            return recovered_df
+        except Exception as e:
+            print(f"Warning: Could not recover data: {e}")
+            return df
+    
+    def get_visualization_dir(self):
+        """Get the visualization directory path"""
+        if self.save_dir:
+            return os.path.join(self.save_dir, "visualizations")
+        return None
