@@ -237,35 +237,35 @@ class DistributionalCounterfactualExplainer:
         avg_Q_change = (past_Qs[-1] - past_Qs[0]) / 5
         return avg_Q_change
 
-    def optimize_without_chance_constraints(
-        self,
-        eta=0.9,
-        max_iter: Optional[int] = 100,
-        tau=10,
-        tol=1e-6,
-    ):
-        logger.info("Optimization (without chance constraints) started")
-        past_Qs = [float("inf")] * 5  # Store the last 5 Q values for moving average
-        for i in range(max_iter):
-            self.swd.distance(
-                X_s=self.X[:, self.explain_indices] * self.costs_vector_reshaped,
-                X_t=self.X_prime[:, self.explain_indices] * self.costs_vector_reshaped,
-                delta=self.delta,
-            )
-            self.wd.distance(y_s=self.y, y_t=self.y_prime, delta=self.delta)
+    # def optimize_without_chance_constraints(
+    #     self,
+    #     eta=0.9,
+    #     max_iter: Optional[int] = 100,
+    #     tau=10,
+    #     tol=1e-6,
+    # ):
+    #     logger.info("Optimization (without chance constraints) started")
+    #     past_Qs = [float("inf")] * 5  # Store the last 5 Q values for moving average
+    #     for i in range(max_iter):
+    #         self.swd.distance(
+    #             X_s=self.X[:, self.explain_indices] * self.costs_vector_reshaped,
+    #             X_t=self.X_prime[:, self.explain_indices] * self.costs_vector_reshaped,
+    #             delta=self.delta,
+    #         )
+    #         self.wd.distance(y_s=self.y, y_t=self.y_prime, delta=self.delta)
 
-            avg_Q_change = self.__perform_SGD(past_Qs, eta=eta, tau=tau)
+    #         avg_Q_change = self.__perform_SGD(past_Qs, eta=eta, tau=tau)
 
-            logger.info(
-                f"Iter {i+1}: Q = {self.Q}, term1 = {self.term1}, term2 = {self.term2}"
-            )
+    #         logger.info(
+    #             f"Iter {i+1}: Q = {self.Q}, term1 = {self.term1}, term2 = {self.term2}"
+    #         )
 
-            if abs(avg_Q_change) < tol:
-                logger.info(f"Converged at iteration {i+1}")
-                break
+    #         if abs(avg_Q_change) < tol:
+    #             logger.info(f"Converged at iteration {i+1}")
+    #             break
 
-        self.best_X = self.X.clone().detach()
-        self.best_y = self.y.clone().detach()
+    #     self.best_X = self.X.clone().detach()
+    #     self.best_y = self.y.clone().detach()
 
     def optimize(
         self,

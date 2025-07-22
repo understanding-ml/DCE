@@ -1,20 +1,12 @@
 import torch
 import numpy as np
-import math
 from skopt import gp_minimize
 from skopt.space import Real
-from .gradient_guidance_mixin import GradientGuidanceMixin
 
-class BayesianStrategy(GradientGuidanceMixin):
-    def __init__(self, explainer, use_gradient_guidance=False, cone_angle=math.pi/4, random_state=None):
-        # Initialize base attributes first
+class BayesianStrategy:
+    def __init__(self, explainer, random_state=None):
         self.explainer = explainer
-        
-        # Initialize gradient guidance mixin
-        GradientGuidanceMixin.__init__(self, explainer, use_gradient_guidance=use_gradient_guidance, cone_angle=cone_angle, random_state=random_state)
         self.random_state = random_state if random_state is not None else 0
-        self._rng = np.random.RandomState(random_state)
-        self._torch_rng = torch.Generator(device=explainer.device).manual_seed(random_state or 0)
 
     def generate_new_X(self, eta, num_trials, top_k=1):
         explainer = self.explainer
@@ -42,14 +34,7 @@ class BayesianStrategy(GradientGuidanceMixin):
                     row = explainer.X[idx].clone()
                     for j, feat in enumerate(explainer.explain_indices):
                         row[feat] = x[j]
-                    
-                    # Apply gradient guidance for continuous features if enabled
-                    X_candidate = explainer._update_row(explainer.X.clone(), idx, row)
-                    if self.use_gradient_guidance:
-                        ref_idx = 0  # Use first reference point for Bayesian optimization
-                        self._apply_gradient_guidance_to_continuous_features(X_candidate, eta, ref_idx, idx)
-                    
-                    X_temp = X_candidate
+                    X_temp = explainer._update_row(explainer.X.clone(), idx, row)
                     y_temp = explainer.model(X_temp)
                     return explainer.evaluate_Q(X_temp, y_temp, eta)[0].item()
 

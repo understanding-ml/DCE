@@ -1,16 +1,9 @@
 import torch
 import numpy as np
-import math
-from .gradient_guidance_mixin import GradientGuidanceMixin
 
-class MonteCarloStrategy(GradientGuidanceMixin):
-    def __init__(self, explainer, random_state=None, use_gradient_guidance=False, cone_angle=math.pi/4):
-        # Initialize base attributes first
+class MonteCarloStrategy:
+    def __init__(self, explainer, random_state=None):
         self.explainer = explainer
-        
-        # Initialize gradient guidance mixin
-        GradientGuidanceMixin.__init__(self, explainer, use_gradient_guidance=use_gradient_guidance, cone_angle=cone_angle, random_state=random_state)
-        
         self.random_state = random_state
         self._rng = np.random.RandomState(random_state)
         self._torch_rng = torch.Generator(device=explainer.device).manual_seed(random_state or 0)
@@ -19,7 +12,6 @@ class MonteCarloStrategy(GradientGuidanceMixin):
         self.random_state = seed
         self._rng = np.random.RandomState(seed)
         self._torch_rng = torch.Generator(device=self.explainer.device).manual_seed(seed)
-    
 
     def generate_new_X(self, eta: float, num_trials: int, top_k: int = 1) -> torch.Tensor:
         explainer = self.explainer
@@ -53,18 +45,13 @@ class MonteCarloStrategy(GradientGuidanceMixin):
                     sampled_val = unique_vals[self._rng.randint(len(unique_vals))]  # numpy sampling
                     cand[idx, idx_feat] = (1 - eta) * explainer.X_prime[ref_idx, idx_feat] + eta * sampled_val
 
-                # Continuous perturbation with optional gradient guidance
-                if self.use_gradient_guidance:
-                    # Use mixin's gradient guidance method for continuous features
-                    guidance_applied = self._apply_gradient_guidance_to_continuous_features(cand, eta, ref_idx, idx)
-                    if not guidance_applied:
-                        # Fallback to random sampling if gradient guidance fails
-                        for idx_feat in explainer.continuous_indices:
-                            self._apply_random_sampling_to_feature(cand, eta, ref_idx, idx, idx_feat)
-                else:
-                    # Original random sampling using mixin method
-                    for idx_feat in explainer.continuous_indices:
-                        self._apply_random_sampling_to_feature(cand, eta, ref_idx, idx, idx_feat)
+                # Continuous perturbation
+                for idx_feat in explainer.continuous_indices:
+                    min_val = explainer.X_prime[:, idx_feat].min()
+                    max_val = explainer.X_prime[:, idx_feat].max()
+                    rand_val = torch.rand(1, generator=self._torch_rng, device=explainer.device)
+                    sampled_val = min_val + rand_val * (max_val - min_val)
+                    cand[idx, idx_feat] = (1 - eta) * explainer.X_prime[ref_idx, idx_feat] + eta * sampled_val
 
             y_cand = explainer.model(cand)
             current_Q, *_ = explainer.evaluate_Q(cand, y_cand, eta)

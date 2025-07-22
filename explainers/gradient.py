@@ -9,9 +9,8 @@ from explainers.base_explainer import BaseExplainer
 from ml_model_interface import Model
 
 class DCEExplainerGradient(BaseExplainer):
-    def __init__(self, model: Model, random_state=None):
-        super().__init__(model=model, data=None)  # data
-        self.random_state = random_state 
+    def __init__(self, model: Model):
+        super().__init__(model=model, data=None)  # data 
         if self.model.backend == 'sklearn':
             self.model.backend = 'sklearn'
         elif self.model.backend == 'pytorch':
@@ -29,7 +28,7 @@ class DCEExplainerGradient(BaseExplainer):
         self.best_Q = float("inf")
 
         self.swd = None
-        self.wd = WassersteinDivergence(random_state=self.random_state)
+        self.wd = WassersteinDivergence()
         self.Q = torch.tensor(torch.inf, dtype=torch.float)
         self.delta = 0.1
 
@@ -54,12 +53,8 @@ class DCEExplainerGradient(BaseExplainer):
         tau=10,
         tol=1e-6,
         bootstrap=True,
-        callback=None,
-        random_state=None
+        callback=None
     ):
-        # Store the random_state for this explanation session
-        if random_state is not None:
-            self.random_state = random_state
         self.explain_columns = explain_columns
         self.explain_indices = [df_factual.columns.get_loc(col) for col in explain_columns]
         self.categorical_indices = [df_factual.columns.get_loc(col) for col in categorical_columns]
@@ -86,7 +81,7 @@ class DCEExplainerGradient(BaseExplainer):
         self.y_prime = y_target.to(self.device)
         self.y = self.model(self.X)
 
-        self.swd = SlicedWassersteinDivergence(len(self.explain_indices), n_proj=n_proj, random_state=self.random_state)
+        self.swd = SlicedWassersteinDivergence(len(self.explain_indices), n_proj=n_proj)
         self.costs_vector = torch.ones(len(self.explain_indices)).float().to(self.device)
         self.costs_vector_reshaped = self.costs_vector.view(1, -1)
 

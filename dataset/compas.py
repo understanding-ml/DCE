@@ -5,43 +5,24 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 
-class HelocData:
+class CompasData:
     def __init__(self, test_size=0.2, seed=42, sample_num=50):
-        self.name = "heloc"
+        self.name = "compas"
         self.seed = seed 
         self.test_size = test_size
         self.random_state = seed
         self.sample_num = sample_num
 
-        self.target_name = 'RiskPerformance'
+        self.target_name = 'two_year_recid'
         self.features = [
-            'ExternalRiskEstimate', 'MSinceOldestTradeOpen', 'MSinceMostRecentTradeOpen', 
-            'AverageMInFile', 'NumSatisfactoryTrades', 'NumTrades60Ever2DerogPubRec', 
-            'NumTrades90Ever2DerogPubRec', 'PercentTradesNeverDelq', 'MSinceMostRecentDelq', 
-            'MaxDelq2PublicRecLast12M', 'MaxDelqEver', 'NumTotalTrades', 'NumTradesOpeninLast12M', 
-            'PercentInstallTrades', 'MSinceMostRecentInqexcl7days', 'NumInqLast6M', 
-            'NumInqLast6Mexcl7days', 'NetFractionRevolvingBurden', 'NetFractionInstallBurden', 
-            'NumRevolvingTradesWBalance', 'NumInstallTradesWBalance', 'NumBank2NatlTradesWHighUtilization', 
-            'PercentTradesWBalance'
+            'age', 'sex', 'race', 'priors_count', 'c_charge_degree', 'decile_score'
         ]
-        
-        # Based on HELOC dataset characteristics - most features are numeric/continuous
-        # Features with discrete values or specific ranges could be treated as categorical
         self.categorical_columns = [
-            'MaxDelq2PublicRecLast12M', 'MaxDelqEver', 'NumTrades60Ever2DerogPubRec', 
-            'NumTrades90Ever2DerogPubRec', 'NumInqLast6M', 'NumInqLast6Mexcl7days',
-            'NumBank2NatlTradesWHighUtilization'
+            'sex', 'race', 'c_charge_degree'
         ]
-        
         self.continuous_columns = [
-            'ExternalRiskEstimate', 'MSinceOldestTradeOpen', 'MSinceMostRecentTradeOpen', 
-            'AverageMInFile', 'NumSatisfactoryTrades', 'PercentTradesNeverDelq', 
-            'MSinceMostRecentDelq', 'NumTotalTrades', 'NumTradesOpeninLast12M', 
-            'PercentInstallTrades', 'MSinceMostRecentInqexcl7days', 'NetFractionRevolvingBurden', 
-            'NetFractionInstallBurden', 'NumRevolvingTradesWBalance', 'NumInstallTradesWBalance', 
-            'PercentTradesWBalance'
+            'age', 'priors_count', 'decile_score'
         ]
-        
         self.explain_columns = self.features.copy()
 
         self._load_data()
@@ -50,26 +31,34 @@ class HelocData:
         self._standardize()
 
     def _load_data(self):
-        self.df_raw = pd.read_csv("data/heloc/heloc.csv")
+        self.df_raw = pd.read_csv("data/compas/compas.csv")
         self.df = self.df_raw.copy()
 
     def _preprocess(self):
-        # Map target variable: 'Bad' -> 1, 'Good' -> 0
-        self.df['RiskPerformance'] = self.df['RiskPerformance'].map({'Bad': 1, 'Good': 0}).astype(int)
+        # Select relevant columns
+        relevant_cols = self.features + [self.target_name]
+        self.df = self.df[relevant_cols].copy()
         
-        # Handle missing values represented as -7, -8, -9
-        # Replace with NaN first, then handle
-        self.df = self.df.replace([-7, -8, -9], np.nan)
+        # Handle missing values
+        self.df = self.df.dropna()
         
-        # Fill missing values with median for continuous features
+        # Encode categorical variables
+        label_encoder = LabelEncoder()
+        self.label_mappings = {}
+
+        for column in self.categorical_columns:
+            if column in self.df.columns:
+                self.df[column] = self.df[column].astype(str)
+                self.df[column] = label_encoder.fit_transform(self.df[column])
+                self.label_mappings[column] = dict(zip(label_encoder.classes_, range(len(label_encoder.classes_))))
+
+        # Fill any remaining missing values with median for continuous columns
         for column in self.continuous_columns:
             if column in self.df.columns and self.df[column].isna().any():
                 self.df[column].fillna(self.df[column].median(), inplace=True)
-        
-        # Fill missing values with mode for categorical features
-        for column in self.categorical_columns:
-            if column in self.df.columns and self.df[column].isna().any():
-                self.df[column].fillna(self.df[column].mode()[0], inplace=True)
+
+        # Ensure target is binary (0 or 1)
+        self.df[self.target_name] = self.df[self.target_name].astype(int)
 
         self.X = self.df[self.features].copy()
         self.y = self.df[self.target_name]

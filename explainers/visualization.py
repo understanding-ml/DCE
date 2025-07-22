@@ -49,8 +49,8 @@ class CallbackVisualizer:
                     df_[col] = df_[col].round().astype("int")
             return df_
 
-        X_fact = explainer.X_prime.cpu().numpy() * std.values + mean.values
-        X_cfact = explainer.X.cpu().numpy() * std.values + mean.values
+        X_fact = explainer.X_prime.detach().cpu().numpy() * std.values + mean.values
+        X_cfact = explainer.X.detach().cpu().numpy() * std.values + mean.values
 
         df_factual = recover_types(pd.DataFrame(X_fact, columns=self.explain_columns))
         df_counter = recover_types(pd.DataFrame(X_cfact, columns=self.explain_columns))
@@ -60,8 +60,8 @@ class CallbackVisualizer:
         y_target = self.y_target.detach().cpu().numpy() if self.y_target is not None else explainer.y_prime.detach().cpu().numpy()
         
         # Debug info for target
-        print(f"🎯 Target info: shape={y_target.shape}, min={y_target.min():.3f}, max={y_target.max():.3f}")
-        print(f"📊 Factual Risk shape: {y_factual.shape}, Counter Risk shape: {y_counter.shape}")
+        # print(f"🎯 Target info: shape={y_target.shape}, min={y_target.min():.3f}, max={y_target.max():.3f}")
+        # print(f"📊 Factual Risk shape: {y_factual.shape}, Counter Risk shape: {y_counter.shape}")
 
         df_factual['Risk'] = y_factual
         df_counter['Risk'] = y_counter
@@ -111,7 +111,7 @@ class CallbackVisualizer:
 
         fig_path = os.path.join(self.output_dir, f"iteration_{iteration}.png")
         fig.savefig(fig_path, dpi=100, bbox_inches='tight')
-        print(f"📈 Saved visualization: {fig_path}")
+        # print(f"📈 Saved visualization: {fig_path}")
         plt.close(fig)
 
         if iteration == self.max_iter - 1:
@@ -123,7 +123,7 @@ class CallbackVisualizer:
             # Use the integrated save directory structure
             self.output_dir = os.path.join(self.parent_save_dir, "visualizations")
             os.makedirs(self.output_dir, exist_ok=True)
-            print(f"📊 Visualization directory created: {self.output_dir}")
+            # print(f"📊 Visualization directory created: {self.output_dir}")
         else:
             # Fallback to original behavior
             from datetime import datetime
@@ -131,7 +131,7 @@ class CallbackVisualizer:
             dataset_name = getattr(self.data, "name", "default")
             self.output_dir = os.path.join("Results", "visualizations", f"{dataset_name}_Result_{timestamp}")
             os.makedirs(self.output_dir, exist_ok=True)
-            print(f"📊 Visualization directory created (fallback): {self.output_dir}")
+            # print(f"📊 Visualization directory created (fallback): {self.output_dir}")
 
     def _combine_images(self):
         img0_path = os.path.join(self.output_dir, "iteration_0.png")

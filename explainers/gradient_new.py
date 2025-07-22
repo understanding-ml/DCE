@@ -1,47 +1,40 @@
-from abc import ABC, abstractmethod
 import torch
-import pandas as pd
 import numpy as np
+import pandas as pd
 from typing import Optional
-import torch.optim as optim
-from explainers.distances import SlicedWassersteinDivergence, WassersteinDivergence
 from explainers.base_explainer import BaseExplainer
-from ml_model_interface import Model
+from explainers.distances import SlicedWassersteinDivergence, WassersteinDivergence
+from explainers.model import Model
+from explainers.visualization import CallbackVisualizer
+from explainers.result_saver import ResultSaver
+import torch.optim as optim
+import math
+
 
 class DCEExplainerGradient(BaseExplainer):
-    def __init__(self, model: Model, random_state=None):
-        super().__init__(model=model, data=None)  # data
-        self.random_state = random_state 
-        if self.model.backend == 'sklearn':
-            self.model.backend = 'sklearn'
-        elif self.model.backend == 'pytorch':
-            self.model.backend = 'PYT'
+    def __init__(self, model: Optional[Model] = None, data=None, model_name=None):
+        if model is None:
+            if model_name is None:
+                raise ValueError("You must provide either `model` or `model_name`.")
+            if data is None:
+                raise ValueError("`data` must be provided when using `model_name` to auto-train.")
+            model = Model(model_name=model_name, X_train=data.X_train, y_train=data.y_train)
 
-        self.model = model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-        self.device = self.model.device if hasattr(self.model, "device") else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        self.X = None
-        self.X_prime = None
-        self.y_prime = None
-        self.optimizer = None
-        self.best_X = None
-        self.Qx_grads = None
-        self.best_Q = float("inf")
-
-        self.swd = None
-        self.wd = WassersteinDivergence(random_state=self.random_state)
-        self.Q = torch.tensor(torch.inf, dtype=torch.float)
-        self.delta = 0.1
+        super().__init__(model=model, data=data)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = model.to(self.device)
+        self.data = data
+        self.logger_data = []
 
     def explain(
         self,
         df_factual: pd.DataFrame,
-        explain_columns,
-        categorical_columns,
-        continuous_columns,
-        y_target,
-        X_init=None,
-        lr=1e-1,
+        explain_columns=None,
+        categorical_columns=None,
+        continuous_columns=None,
+        y_target=None,
+        X_init=True,
+        lr=0.1,
         n_proj=50,
         delta=0.1,
         U_1=0.5,
@@ -50,35 +43,94 @@ class DCEExplainerGradient(BaseExplainer):
         l=0.2,
         r=1.0,
         kappa=0.05,
-        max_iter=50,
-        tau=10,
+        max_iter=100,
+        tau=1e3,
         tol=1e-6,
         bootstrap=True,
         callback=None,
+        save_results=True,
+        dataset_name=None,
+        model_name=None,
+        seed=None,
         random_state=None
     ):
+        # Auto-fetch if omitted
+        if explain_columns is None:
+            explain_columns = self.data.explain_columns
+        if categorical_columns is None:
+            categorical_columns = self.data.categorical_columns
+        if continuous_columns is None:
+            continuous_columns = self.data.continuous_columns
+
         # Store the random_state for this explanation session
         if random_state is not None:
             self.random_state = random_state
+        else:
+            self.random_state = seed
+
+        # Handle X_init as boolean to control initial perturbation
+        if X_init:
+            # Use perturbed initial data (with noise)
+            X_init_tensor = self.data.get_X_init()
+            print("🎲 Using perturbed initial data (X_init=True)")
+        else:
+            # Use original factual data as starting point (no noise)
+            X_init_tensor = torch.from_numpy(df_factual.values).float()
+            print("📍 Using original factual data as starting point (X_init=False)")
+            
+        y_target = self.data.get_y_target()
+        
+        # Store X_init for saving
+        self.X_init = X_init_tensor
+
+        # Setup save directory FIRST if save_results is True
+        if save_results:
+            self.result_saver = ResultSaver()
+            # Create a mock strategy object for the result saver
+            class GradientStrategy:
+                def __init__(self):
+                    pass
+            
+            mock_strategy = GradientStrategy()
+            mock_strategy.__class__.__name__ = "GradientStrategy"
+            
+            self.save_dir = self.result_saver.setup_save_directory(
+                dataset_name, model_name, mock_strategy, n_proj, delta, U_1, U_2, l, r, max_iter, 1, seed
+            )
+            # Override the DCE_ prefix to DCE_gradient_
+            import os
+            old_save_dir = self.save_dir
+            new_save_dir = old_save_dir.replace("/DCE_", "/DCE_gradient_")
+            if old_save_dir != new_save_dir:
+                # Create the new directory and update
+                os.makedirs(os.path.dirname(new_save_dir), exist_ok=True)
+                if os.path.exists(old_save_dir):
+                    import shutil
+                    shutil.move(old_save_dir, new_save_dir)
+                self.save_dir = new_save_dir
+                self.result_saver.save_dir = new_save_dir
+                print(f"Updated save directory to: {self.save_dir}")
+        else:
+            self.result_saver = None
+            self.save_dir = None
+
+        # Set up callback visualizer (mode = "off" | "final_only" | "full")
+        if callback in [True, "final_only"]:
+            callback = CallbackVisualizer(mode="final_only", model=self.model, data=self.data,
+                                        explain_columns=explain_columns, y_target=y_target, max_iter=max_iter,
+                                        save_dir=self.save_dir)
+        elif callback == "full":
+            callback = CallbackVisualizer(mode="full", model=self.model, data=self.data,
+                                        explain_columns=explain_columns, y_target=y_target, max_iter=max_iter,
+                                        save_dir=self.save_dir)
+
         self.explain_columns = explain_columns
         self.explain_indices = [df_factual.columns.get_loc(col) for col in explain_columns]
         self.categorical_indices = [df_factual.columns.get_loc(col) for col in categorical_columns]
         self.continuous_indices = [df_factual.columns.get_loc(col) for col in continuous_columns]
         
-        self.X = df_factual.values
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.X = torch.from_numpy(self.X).float().to(self.device)
-
-        self.X_prime = self.X.clone()
-        if X_init is None:
-            noise = torch.randn_like(self.X_prime[:, self.explain_indices]) * 0.01
-            self.X = self.X.clone()
-            self.X[:, self.explain_indices] = (
-                self.X_prime[:, self.explain_indices] + noise
-            ).to(self.device)
-        else:
-            self.X = X_init.clone().to(self.device)
-
+        self.X = X_init_tensor.clone().to(self.device)
+        self.X_prime = torch.from_numpy(df_factual.values).float().to(self.device)
 
         self.X.requires_grad_(True).retain_grad()
         self.optimizer = optim.SGD([self.X], lr=lr)
@@ -86,80 +138,151 @@ class DCEExplainerGradient(BaseExplainer):
         self.y_prime = y_target.to(self.device)
         self.y = self.model(self.X)
 
-        self.swd = SlicedWassersteinDivergence(len(self.explain_indices), n_proj=n_proj, random_state=self.random_state)
+        # Fixed seed SWD computation like nondifferentiable.py
+        self.swd = SlicedWassersteinDivergence(len(self.explain_indices), n_proj=n_proj, random_state=seed)
+        self.wd = WassersteinDivergence(random_state=seed)
+        
         self.costs_vector = torch.ones(len(self.explain_indices)).float().to(self.device)
         self.costs_vector_reshaped = self.costs_vector.view(1, -1)
 
-    
         self.interval_left = l
         self.interval_right = r
         past_Qs = [float("inf")] * 5
+        
+        self.best_Q = float("inf")
+        self.best_X = None
+        self.best_y = None
+        self.best_iter = 0
+        self.found_feasible_solution = False
+
+        # Initialize Q and terms
+        self.Q = torch.tensor(torch.inf, dtype=torch.float, device=self.device)
+        self.term1 = torch.tensor(0.0, dtype=torch.float, device=self.device)
+        self.term2 = torch.tensor(0.0, dtype=torch.float, device=self.device)
+        self.X_prev = self.X.clone().detach()  # For tracking changes
+
+        # Save initial data files (matching nondifferentiable.py)
+        if save_results and self.save_dir:
+            import os
+            os.makedirs(self.save_dir, exist_ok=True)
+            
+            # Save x_true (factual data without noise)
+            df_factual.to_csv(os.path.join(self.save_dir, "x_true.csv"), index=False)
+            
+            # Save y_true (actual predictions for factual data)
+            y_true = self.model(self.X_prime).detach().cpu().numpy()
+            pd.DataFrame(y_true, columns=['y_true']).to_csv(os.path.join(self.save_dir, "y_true.csv"), index=False)
+            
+            # Save y_target
+            if isinstance(y_target, torch.Tensor):
+                y_target_np = y_target.detach().cpu().numpy()
+            else:
+                y_target_np = y_target
+            pd.DataFrame(y_target_np, columns=['y_target']).to_csv(os.path.join(self.save_dir, "y_target.csv"), index=False)
+            
+            print(f"📁 Initial data saved:")
+            print(f"   - x_true.csv: {df_factual.shape}")
+            print(f"   - y_true.csv: {y_true.shape}")
+            print(f"   - y_target.csv: {y_target_np.shape}")
 
         print("Optimization started")
-        for i in range(0, max_iter + 1):
+        for i in range(max_iter):
             print(f"\n--- Iteration {i} ---")
 
-            if i > 0:
-                self.optimizer.zero_grad()
-                self._update_X_grads(mu_list, nu, eta, tau)
-                self.optimizer.step()
-                self.y = self.model(self.X)
-
+            # Calculate distances first
             X_s = self.X[:, self.explain_indices] * self.costs_vector_reshaped
             X_t = self.X_prime[:, self.explain_indices] * self.costs_vector_reshaped
-            y_s = self.model(self.X).detach().clone()
-            y_t = self.y_prime.detach().clone()
+            y_s = self.y
+            y_t = self.y_prime
 
-            swd_dist, _ = self.swd.distance(X_s, X_t, delta=self.delta)
-            wd_dist, _ = self.wd.distance(y_s, y_t, delta=self.delta)
+            swd_dist, _ = self.swd.distance(X_s, X_t, delta=delta)
+            wd_dist, _ = self.wd.distance(y_s, y_t, delta=delta)
 
-            Qv_lower, Qv_upper = self.wd.distance_interval(y_s, y_t, delta=self.delta, alpha=alpha, bootstrap=bootstrap)
-            Qu_lower, Qu_upper = self.swd.distance_interval(X_s, X_t, delta=self.delta, alpha=alpha, bootstrap=False)
+            Qv_lower, Qv_upper = self.wd.distance_interval(y_s, y_t, delta=delta, alpha=alpha, bootstrap=bootstrap)
+            Qu_lower, Qu_upper = self.swd.distance_interval(X_s, X_t, delta=delta, alpha=alpha, bootstrap=False)
 
             if not torch.isfinite(torch.tensor(Qu_upper)):
                 Qu_upper = swd_dist
             if not torch.isfinite(torch.tensor(Qv_upper)):
                 Qv_upper = wd_dist
+                
+            # Store for logging (matching nondifferentiable.py)
+            self.Qu_upper = Qu_upper
+            self.Qv_upper = Qv_upper
 
             eta, self.interval_left, self.interval_right = self._get_eta_interval_narrowing(
                 U_1, U_2, Qu_upper, Qv_upper, self.interval_left, self.interval_right, kappa
             )
 
-            self.swd.distance(X_s, X_t, delta=self.delta)
-            self.wd.distance(y_s, y_t, delta=self.delta)
-            mu_list = self.swd.mu_list
-            nu = self.wd.nu
-            Q, term1, term2 = self._update_Q(mu_list, nu, eta)
-
             print(f"U_1 - Qu_upper = {U_1 - Qu_upper:.6f}, U_2 - Qv_upper = {U_2 - Qv_upper:.6f}")
             print(f"eta = {eta:.4f}, interval_left = {self.interval_left:.4f}, interval_right = {self.interval_right:.4f}")
-            print(f"Q = {Q.item():.6f}, term1 = {term1.item():.6f}, term2 = {term2.item():.6f}")
 
+            # Perform SGD step (includes Q calculation)
+            avg_Q_change = self.__perform_SGD(past_Qs, eta=eta, tau=tau)
 
-            past_Qs.pop(0)
-            past_Qs.append(Q.item())
-            avg_Q_change = (past_Qs[-1] - past_Qs[0]) / 5
+            print(f"Q = {self.Q.item():.6f}, term1 = {self.term1.item():.6f}, term2 = {self.term2.item():.6f}")
 
-            if Q.item() < self.best_Q:
-                self.best_Q = Q.item()
+            # Check feasibility and update best solution
+            if (U_1 - Qu_upper) < 0 or (U_2 - Qv_upper) < 0:
+                gap = np.inf
+                is_feasible = False
+            else:
+                gap = (U_1 - Qu_upper) + (U_2 - Qv_upper)
+                self.found_feasible_solution = True
+                is_feasible = True
+
+            if is_feasible and self.Q.item() < getattr(self, "best_Q", float("inf")):
+                self.best_Q = self.Q.item()
                 self.best_X = self.X.clone().detach()
                 self.best_y = self.model(self.best_X).detach()
                 self.best_iter = i
+                self.found_feasible_solution = True
+                print(f"🌟 New best Q found: {self.best_Q:.6f} at iter {i}")
 
             self.final_X = self.X.clone().detach()
             self.final_y = self.model(self.final_X).detach()
-            self.final_Q = Q.item()
+            self.final_Q = self.Q.item()
+            print(f"best_Q = {getattr(self, 'best_Q', None)}, final_Q = {self.final_Q:.6f}")
+
+            # Log data for saving (matching nondifferentiable.py exactly)
+            if save_results:
+                self.logger_data.append({
+                    'iteration': i,
+                    'Q': self.Q.item(),
+                    'term1': self.term1.item(),
+                    'term2': self.term2.item(),
+                    'eta': eta,
+                    'Qu_upper': self.Qu_upper,
+                    'Qv_upper': self.Qv_upper,
+                    'U1_minus_Qu': U_1 - self.Qu_upper,
+                    'U2_minus_Qv': U_2 - self.Qv_upper,
+                    'is_feasible': is_feasible,
+                    'interval_left': self.interval_left,
+                    'interval_right': self.interval_right
+                })
 
             if callback:
-                callback(i)
+                callback(self, i)
 
-        print("Optimization finished.")
+            if abs(avg_Q_change) < tol:
+                print(f"Converged at iteration {i}")
+                break
 
-        return pd.DataFrame(
-            self.best_X.detach().cpu().numpy(),
-            columns=df_factual.columns
-        )
+        print("Optimization End")
 
+        # Save results if requested
+        if save_results and self.result_saver:
+            self.result_saver.save_results(self, df_factual.columns)
+            
+        # Return recovered (denormalized) data for better readability
+        result_X = self.best_X if self.found_feasible_solution else self.final_X
+        df_result = pd.DataFrame(result_X.detach().cpu().numpy(), columns=df_factual.columns)
+        
+        # Apply data recovery if possible
+        if hasattr(self.data, 'mean') and hasattr(self.data, 'std'):
+            df_result = self._recover_data(df_result, df_factual.columns)
+            
+        return df_result
 
     def _update_Q(self, mu_list, nu, eta):
         n, m = (
@@ -172,7 +295,7 @@ class DCEExplainerGradient(BaseExplainer):
         ]
 
         # Compute the first term
-        self.term1 = torch.tensor(0.0, dtype=torch.float).to(self.device)
+        term1 = torch.tensor(0.0, dtype=torch.float).to(self.device)
         for k, theta in enumerate(thetas):
             mu = mu_list[k]
             mu = mu.to(self.device)
@@ -187,7 +310,7 @@ class DCEExplainerGradient(BaseExplainer):
                         * self.costs_vector_reshaped
                     )
 
-                    self.term1 += (
+                    term1 += (
                         mu[i, j]
                         * (
                             torch.dot(theta, weighted_X[i])
@@ -195,20 +318,51 @@ class DCEExplainerGradient(BaseExplainer):
                         )
                         ** 2
                     )
-        self.term1 /= torch.tensor(
+        term1 /= torch.tensor(
             self.swd.n_proj, dtype=torch.float, device=self.device
         )
 
         # Compute the second term
-        self.term2 = torch.tensor(0.0, dtype=torch.float)
+        term2 = torch.tensor(0.0, dtype=torch.float)
         for i in range(n):
             for j in range(m):
-                self.term2 += (
+                term2 += (
                     nu[i, j] * (self.model(self.X[i]) - self.y_prime[j]) ** 2
                 ).item()
 
-        self.Q = (1 - eta) * self.term1 + eta * self.term2
-        return self.Q, self.term1, self.term2
+        Q = (1 - eta) * term1 + eta * term2
+        
+        # Store as instance attributes
+        self.Q = Q
+        self.term1 = term1
+        self.term2 = term2
+        
+        return Q, term1, term2
+
+    def __perform_SGD(self, past_Qs, eta, tau):
+        # Reset the gradients
+        self.optimizer.zero_grad()
+
+        # Compute the gradients for self.X[:, self.explain_indices]
+        self._update_X_grads(
+            mu_list=self.swd.mu_list,
+            nu=self.wd.nu,
+            eta=eta,
+            tau=tau,
+        )
+
+        # Perform an optimization step
+        self.optimizer.step()
+
+        # Update the Q value, X_all, and y by the newly optimized X
+        self._update_Q(mu_list=self.swd.mu_list, nu=self.wd.nu, eta=eta)
+        self.y = self.model(self.X)
+
+        # Check for convergence using moving average of past Q changes
+        past_Qs.pop(0)
+        past_Qs.append(self.Q.item())
+        avg_Q_change = (past_Qs[-1] - past_Qs[0]) / 5
+        return avg_Q_change
 
     def _update_X_grads(self, mu_list, nu, eta, tau):
         n, m = (
@@ -271,27 +425,29 @@ class DCEExplainerGradient(BaseExplainer):
         )
         nu = nu.to(self.device)
 
-        self.nu = nu
-        self.diff_model = diff_model
-        self.model_grads = model_grads
-        # print("nu.unsqueeze(-1).shape:", nu.unsqueeze(-1).shape)
-        # print("diff_model.shape:", diff_model.shape)
-        # print("diff_model.unsqueeze(-1).shape:", diff_model.unsqueeze(-1).shape)
-        # print("model_grads.unsqueeze(1).shape:", model_grads.unsqueeze(1).shape)
-
-
         gradient_term2 = (nu.unsqueeze(-1) * diff_model * model_grads.unsqueeze(1)).sum(
             dim=1
         )
 
         self.Qx_grads = (1 - eta) * gradient_term1 + eta * gradient_term2
-        # self.Qx_grads = gradient_term2
         self.X.grad.zero_()
         self.X.grad[:, self.explain_indices] = self.Qx_grads * tau
 
-
     def _get_eta_interval_narrowing(self, U_1, U_2, Qu_upper, Qv_upper, l, r, kappa):
-        eta = self.__choose_eta_within_interval(a=U_1 - Qu_upper, b=U_2 - Qv_upper, l=l, r=r)
+        """
+        Implements the interval narrowing algorithm.
+        """
+        if not math.isfinite(Qv_upper):
+            return l, l, r
+
+        if not math.isfinite(Qu_upper):
+            return r, l, r
+
+        eta = self.__choose_eta_within_interval(
+            a=U_1 - Qu_upper, b=U_2 - Qv_upper, l=l, r=r
+        )
+
+        # Narrow the interval
         if eta > (l + r) / 2:
             l = l + kappa * (r - l)
         else:
@@ -303,3 +459,43 @@ class DCEExplainerGradient(BaseExplainer):
             return l if a < 0 else r
         eta_proportion = b / (a + b) if a < 0 else a / (a + b)
         return l + eta_proportion * (r - l)
+    
+    def _recover_data(self, df, columns):
+        """Recover (denormalize) data using dataset statistics"""
+        try:
+            if not hasattr(self.data, 'mean') or not hasattr(self.data, 'std'):
+                return df
+                
+            # Create a copy to avoid modifying original
+            df_recovered = df.copy()
+            
+            # Denormalize using mean and std
+            if hasattr(self.data, 'explain_columns'):
+                explain_cols = self.data.explain_columns
+                for col in explain_cols:
+                    if col in df_recovered.columns:
+                        mean_val = self.data.mean[col] if hasattr(self.data.mean, '__getitem__') else getattr(self.data.mean, col, 0)
+                        std_val = self.data.std[col] if hasattr(self.data.std, '__getitem__') else getattr(self.data.std, col, 1)
+                        df_recovered[col] = df_recovered[col] * std_val + mean_val
+            
+            # Recover data types if available
+            if hasattr(self.data, 'df'):
+                dtype_dict = self.data.df.dtypes.apply(lambda x: x.name).to_dict()
+                df_recovered = self._recovering_types(df_recovered, dtype_dict)
+            
+            return df_recovered
+            
+        except Exception as e:
+            print(f"Warning: Could not recover data: {str(e)}")
+            return df
+            
+    def _recovering_types(self, df_to_recover, dtype_dict):
+        """Recover original data types"""
+        df_recovered = df_to_recover.copy()
+        for k, v in dtype_dict.items():
+            if k in df_recovered.columns:
+                if v.startswith('int'):  
+                    df_recovered[k] = df_recovered[k].round().astype(v)
+                else: 
+                    df_recovered[k] = df_recovered[k].astype(v)
+        return df_recovered

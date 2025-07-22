@@ -73,6 +73,12 @@ class ResultSaver:
         if hasattr(strategy, 'sigma_decay'):
             strategy_params.append(f"sd={strategy.sigma_decay}")
         
+        # Add angle parameter for gradient guidance (if enabled)
+        if hasattr(strategy, 'use_gradient_guidance') and strategy.use_gradient_guidance:
+            if hasattr(strategy, 'cone_angle'):
+                angle_degrees = round(strategy.cone_angle * 180 / 3.14159, 1)  # Convert to degrees
+                strategy_params.append(f"angle={angle_degrees}")
+        
         strategy_param_str = ",".join(strategy_params) if strategy_params else "default"
         
         # DCE parameters with abbreviations
@@ -152,6 +158,12 @@ class ResultSaver:
         if hasattr(strategy, 'sigma_decay'):
             params['sigma_decay'] = strategy.sigma_decay
         
+        # Add angle parameter for gradient guidance (if enabled) - but exclude use_gradient_guidance itself
+        if hasattr(strategy, 'use_gradient_guidance') and strategy.use_gradient_guidance:
+            if hasattr(strategy, 'cone_angle'):
+                params['cone_angle'] = strategy.cone_angle
+                params['angle_degrees'] = round(strategy.cone_angle * 180 / 3.14159, 1)
+        
         return params
     
     def save_results(self, explainer, columns):
@@ -230,7 +242,7 @@ class ResultSaver:
                         'mpo': 'mutation_prob_cont', 'mns': 'mutation_noise_scale', 'T0': 'T0',
                         'Tf': 'T_final', 'td': 'temp_decay', 'swarm': 'swarm_size', 'w': 'w',
                         'c1': 'c1', 'c2': 'c2', 'F': 'F', 'CR': 'CR', 'pop': 'population_size',
-                        'sd': 'sigma_decay'
+                        'sd': 'sigma_decay', 'angle': 'angle_degrees'
                     }
                 }
             }

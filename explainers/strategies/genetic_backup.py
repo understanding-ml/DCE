@@ -1,9 +1,7 @@
 import torch
 import numpy as np
-import math
-from .gradient_guidance_mixin import GradientGuidanceMixin
 
-class GeneticStrategy(GradientGuidanceMixin):
+class GeneticStrategy:
     def __init__(
         self,
         explainer,
@@ -12,15 +10,9 @@ class GeneticStrategy(GradientGuidanceMixin):
         mutation_prob_cat=0.3,
         mutation_prob_cont=0.8,
         mutation_noise_scale=0.1,
-        random_state=None,
-        use_gradient_guidance=False,
-        cone_angle=math.pi/4
+        random_state=None
     ):
-        # Initialize base attributes first
         self.explainer = explainer
-        
-        # Initialize gradient guidance mixin
-        GradientGuidanceMixin.__init__(self, explainer, use_gradient_guidance=use_gradient_guidance, cone_angle=cone_angle, random_state=random_state)
         self.crossover_prob = crossover_prob
         self.gene_swap_prob = gene_swap_prob
         self.mutation_prob_cat = mutation_prob_cat
@@ -71,24 +63,14 @@ class GeneticStrategy(GradientGuidanceMixin):
                         sampled_val = unique_vals[self._rng.randint(len(unique_vals))]
                         parent1[feat_idx] = (1 - eta) * explainer.X_prime[idx, feat_idx] + eta * sampled_val
 
-                # Continuous mutation with optional gradient guidance
-                if self.use_gradient_guidance:
-                    # Try gradient-guided mutation for continuous features
-                    guidance_applied = self._apply_gradient_guidance_to_continuous_features(cand, eta, idx, idx)
-                    if not guidance_applied:
-                        # Fallback to standard mutation
-                        for feat_idx in explainer.continuous_indices:
-                            if torch.rand(1, generator=self._torch_rng, device=explainer.device).item() < self.mutation_prob_cont:
-                                self._apply_random_sampling_to_feature(cand, eta, idx, idx, feat_idx)
-                else:
-                    # Standard continuous mutation
-                    for feat_idx in explainer.continuous_indices:
-                        if torch.rand(1, generator=self._torch_rng, device=explainer.device).item() < self.mutation_prob_cont:
-                            min_val = explainer.X_prime[:, feat_idx].min()
-                            max_val = explainer.X_prime[:, feat_idx].max()
-                            noise = torch.randn(1, generator=self._torch_rng, device=explainer.device) * self.mutation_noise_scale
-                            mutated_val = parent1[feat_idx] + noise * (max_val - min_val)
-                            parent1[feat_idx] = (1 - eta) * parent1[feat_idx] + eta * mutated_val
+                # Continuous mutation
+                for feat_idx in explainer.continuous_indices:
+                    if torch.rand(1, generator=self._torch_rng, device=explainer.device).item() < self.mutation_prob_cont:
+                        min_val = explainer.X_prime[:, feat_idx].min()
+                        max_val = explainer.X_prime[:, feat_idx].max()
+                        noise = torch.randn(1, generator=self._torch_rng, device=explainer.device) * self.mutation_noise_scale
+                        mutated_val = parent1[feat_idx] + noise * (max_val - min_val)
+                        parent1[feat_idx] = (1 - eta) * parent1[feat_idx] + eta * mutated_val
 
                 cand[idx] = parent1
 

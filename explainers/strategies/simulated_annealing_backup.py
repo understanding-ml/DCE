@@ -1,9 +1,7 @@
 import torch
 import numpy as np
-import math
-from .gradient_guidance_mixin import GradientGuidanceMixin
 
-class SimulatedAnnealingStrategy(GradientGuidanceMixin):
+class SimulatedAnnealingStrategy:
     def __init__(
         self,
         explainer,
@@ -11,14 +9,8 @@ class SimulatedAnnealingStrategy(GradientGuidanceMixin):
         T_final: float = 0.001,
         temp_decay: float = None,
         random_state: int = None,
-        use_gradient_guidance=False,
-        cone_angle=math.pi/4
     ):
-        # Initialize base attributes first
         self.explainer = explainer
-        
-        # Initialize gradient guidance mixin
-        GradientGuidanceMixin.__init__(self, explainer, use_gradient_guidance=use_gradient_guidance, cone_angle=cone_angle, random_state=random_state)
         self.T0 = T0
         self.T_final = T_final
         self.temp_decay = temp_decay
@@ -27,7 +19,6 @@ class SimulatedAnnealingStrategy(GradientGuidanceMixin):
         # Setup reproducible RNGs
         self._np_rng = np.random.RandomState(random_state)
         self._torch_rng = torch.Generator(device=explainer.device).manual_seed(random_state or 0)
-        self._rng = self._np_rng  # Alias for mixin compatibility
 
     def generate_new_X(self, eta: float, num_trials: int, top_k: int = 1) -> torch.Tensor:
         explainer = self.explainer
@@ -70,28 +61,11 @@ class SimulatedAnnealingStrategy(GradientGuidanceMixin):
                                 new_candidate[feat] = (1 - eta) * explainer.X_prime[idx, feat] + eta * sampled
 
                         elif feat in explainer.continuous_indices:
-                            # Use gradient guidance if enabled, otherwise use standard perturbation
-                            if self.use_gradient_guidance:
-                                # Create a temporary candidate for gradient computation
-                                temp_cand = explainer.X.clone()
-                                temp_cand[idx] = new_candidate
-                                guidance_applied = self._apply_gradient_guidance_to_continuous_features(temp_cand, eta, idx, idx)
-                                if guidance_applied:
-                                    new_candidate = temp_cand[idx]
-                                else:
-                                    # Fallback to standard perturbation
-                                    min_val = explainer.X_prime[:, feat].min()
-                                    max_val = explainer.X_prime[:, feat].max()
-                                    noise = torch.randn(1, generator=self._torch_rng, device=explainer.device) * 0.1 * T * (max_val - min_val)
-                                    perturbed = current_candidate[feat] + noise
-                                    new_candidate[feat] = (1 - eta) * explainer.X_prime[idx, feat] + eta * perturbed
-                            else:
-                                # Standard perturbation
-                                min_val = explainer.X_prime[:, feat].min()
-                                max_val = explainer.X_prime[:, feat].max()
-                                noise = torch.randn(1, generator=self._torch_rng, device=explainer.device) * 0.1 * T * (max_val - min_val)
-                                perturbed = current_candidate[feat] + noise
-                                new_candidate[feat] = (1 - eta) * explainer.X_prime[idx, feat] + eta * perturbed
+                            min_val = explainer.X_prime[:, feat].min()
+                            max_val = explainer.X_prime[:, feat].max()
+                            noise = torch.randn(1, generator=self._torch_rng, device=explainer.device) * 0.1 * T * (max_val - min_val)
+                            perturbed = current_candidate[feat] + noise
+                            new_candidate[feat] = (1 - eta) * explainer.X_prime[idx, feat] + eta * perturbed
 
                     X_new_candidate = explainer._update_row(explainer.X.clone(), idx, new_candidate)
                     y_new_candidate = explainer.model(X_new_candidate)

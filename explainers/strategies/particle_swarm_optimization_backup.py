@@ -1,9 +1,7 @@
 import torch
 import numpy as np
-import math
-from .gradient_guidance_mixin import GradientGuidanceMixin
 
-class ParticleSwarmOptimizationStrategy(GradientGuidanceMixin):
+class ParticleSwarmOptimizationStrategy:
     def __init__(
         self,
         explainer,
@@ -11,15 +9,9 @@ class ParticleSwarmOptimizationStrategy(GradientGuidanceMixin):
         w: float = 0.5,
         c1: float = 1.0,
         c2: float = 1.0,
-        use_gradient_guidance=False,
-        cone_angle=math.pi/4,
         random_state: int = None
     ):
-        # Initialize base attributes first
         self.explainer = explainer
-        
-        # Initialize gradient guidance mixin
-        GradientGuidanceMixin.__init__(self, explainer, use_gradient_guidance=use_gradient_guidance, cone_angle=cone_angle, random_state=random_state)
         self.swarm_size = swarm_size
         self.w = w
         self.c1 = c1
@@ -27,7 +19,6 @@ class ParticleSwarmOptimizationStrategy(GradientGuidanceMixin):
         self.random_state = random_state
 
         # 设置随机种子
-        self._rng = np.random.RandomState(random_state)
         self._torch_rng = torch.Generator(device=explainer.device)
         if random_state is not None:
             self._torch_rng.manual_seed(random_state)
@@ -84,19 +75,6 @@ class ParticleSwarmOptimizationStrategy(GradientGuidanceMixin):
                             + self.c2 * r2 * (global_best - swarm[i])
                         )
                         swarm[i] = swarm[i] + velocities[i]
-                        
-                        # Apply gradient guidance if enabled
-                        if self.use_gradient_guidance:
-                            candidate_row = explainer.X[idx].clone()
-                            for j, feat in enumerate(explainer.explain_indices):
-                                candidate_row[feat] = swarm[i][j]
-                            X_candidate = explainer._update_row(explainer.X.clone(), idx, candidate_row)
-                            ref_idx = 0  # Use first reference point
-                            if self._apply_gradient_guidance_to_continuous_features(X_candidate, eta, ref_idx, idx):
-                                # Update swarm particle with guided values
-                                for j, feat in enumerate(explainer.explain_indices):
-                                    if feat in explainer.continuous_indices:
-                                        swarm[i][j] = X_candidate[idx, feat]
 
                         # 计算新位置 Q 值
                         candidate_row = explainer.X[idx].clone()

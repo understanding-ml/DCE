@@ -136,6 +136,5 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## 📬 Contact
 
 - Lei You: leiyo@dtu.dk
-- Lele Cao: lele.cao@eqtpartners.com
 
 For questions or suggestions, please open an issue on GitHub.

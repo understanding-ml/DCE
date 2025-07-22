@@ -1,15 +1,9 @@
 import torch
 import numpy as np
-import math
-from .gradient_guidance_mixin import GradientGuidanceMixin
 
-class DifferentialEvolutionStrategy(GradientGuidanceMixin):
-    def __init__(self, explainer, F=0.5, CR=0.9, use_gradient_guidance=False, cone_angle=math.pi/4, random_state=None):
-        # Initialize base attributes first
+class DifferentialEvolutionStrategy:
+    def __init__(self, explainer, F=0.5, CR=0.9, random_state=None):
         self.explainer = explainer
-        
-        # Initialize gradient guidance mixin
-        GradientGuidanceMixin.__init__(self, explainer, use_gradient_guidance=use_gradient_guidance, cone_angle=cone_angle, random_state=random_state)
         self.F = F  # 差分缩放因子
         self.CR = CR  # 交叉概率
         self.random_state = random_state
@@ -56,20 +50,6 @@ class DifferentialEvolutionStrategy(GradientGuidanceMixin):
                     for j in range(len(explainer.explain_indices)):
                         if self._rng.rand() < self.CR:
                             trial[j] = mutant[j]
-
-                    # Apply gradient guidance for continuous features if enabled
-                    if self.use_gradient_guidance:
-                        X_candidate = explainer.X.clone()
-                        new_candidate_temp = current_candidate.clone()
-                        for pos, feat in enumerate(explainer.explain_indices):
-                            new_candidate_temp[feat] = trial[pos]
-                        X_candidate = explainer._update_row(X_candidate, idx, new_candidate_temp)
-                        ref_idx = 0  # Use first reference point
-                        self._apply_gradient_guidance_to_continuous_features(X_candidate, eta, ref_idx, idx)
-                        # Update trial with guided values for continuous features
-                        for pos, feat in enumerate(explainer.explain_indices):
-                            if feat in explainer.continuous_indices:
-                                trial[pos] = X_candidate[idx, feat]
 
                     for feat in explainer.categorical_indices:
                         if feat in explainer.explain_indices:
