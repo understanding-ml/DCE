@@ -12,13 +12,13 @@ class SimulatedAnnealingStrategy(GradientGuidanceMixin):
         temp_decay: float = None,
         random_state: int = None,
         use_gradient_guidance=False,
-        cone_angle=math.pi/4
+        weight_alpha=0.5
     ):
         # Initialize base attributes first
         self.explainer = explainer
         
         # Initialize gradient guidance mixin
-        GradientGuidanceMixin.__init__(self, explainer, use_gradient_guidance=use_gradient_guidance, cone_angle=cone_angle, random_state=random_state)
+        GradientGuidanceMixin.__init__(self, explainer, use_gradient_guidance=use_gradient_guidance, weight_alpha=weight_alpha, random_state=random_state)
         self.T0 = T0
         self.T_final = T_final
         self.temp_decay = temp_decay

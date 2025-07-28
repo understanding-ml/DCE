@@ -55,7 +55,8 @@ class DCENonDifferentiable(BaseExplainer):
         save_results=True,
         dataset_name=None,
         model_name=None,
-        seed=None
+        seed=None,
+        gradient_method="cone_sampling"
     ):
         if not hasattr(strategy, "generate_new_X"):
             raise ValueError("The strategy must implement method `generate_new_X(eta, num_trials, top_k)`")
@@ -87,7 +88,7 @@ class DCENonDifferentiable(BaseExplainer):
         if save_results:
             self.result_saver = ResultSaver()
             self.save_dir = self.result_saver.setup_save_directory(
-                dataset_name, model_name, strategy, n_proj, delta, U_1, U_2, l, r, max_iter, top_k, seed
+                dataset_name, model_name, strategy, n_proj, delta, U_1, U_2, l, r, max_iter, top_k, seed, gradient_method
             )
         else:
             self.result_saver = None

@@ -54,8 +54,8 @@ class HelocData:
         self.df = self.df_raw.copy()
 
     def _preprocess(self):
-        # Map target variable: 'Bad' -> 1, 'Good' -> 0
-        self.df['RiskPerformance'] = self.df['RiskPerformance'].map({'Bad': 1, 'Good': 0}).astype(int)
+        # Map target variable: 'Bad' -> 0, 'Good' -> 1 (consistent with baseline)
+        self.df['RiskPerformance'] = self.df['RiskPerformance'].map({'Bad': 0, 'Good': 1}).astype(int)
         
         # Handle missing values represented as -7, -8, -9
         # Replace with NaN first, then handle
@@ -64,12 +64,12 @@ class HelocData:
         # Fill missing values with median for continuous features
         for column in self.continuous_columns:
             if column in self.df.columns and self.df[column].isna().any():
-                self.df[column].fillna(self.df[column].median(), inplace=True)
+                self.df[column] = self.df[column].fillna(self.df[column].median())
         
         # Fill missing values with mode for categorical features
         for column in self.categorical_columns:
             if column in self.df.columns and self.df[column].isna().any():
-                self.df[column].fillna(self.df[column].mode()[0], inplace=True)
+                self.df[column] = self.df[column].fillna(self.df[column].mode()[0])
 
         self.X = self.df[self.features].copy()
         self.y = self.df[self.target_name]
@@ -103,7 +103,9 @@ class HelocData:
 
     def get_y_target(self):
         torch.manual_seed(self.seed)
-        y_target = torch.distributions.Beta(0.1, 0.9).sample((self.sample_num,)).to(torch.float32)
+        # Use Beta distribution for more realistic and diverse targets (faster convergence)
+        # y_target = torch.distributions.Beta(0.1, 0.9).sample((self.sample_num,)).to(torch.float32)
+        y_target = torch.full((self.sample_num,), 1.0).to(torch.float32)  # All 1.0 targets (slower convergence)
         return y_target
 
     def get_X_init(self):

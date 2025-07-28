@@ -1,8 +1,8 @@
 """
-Gradient Guidance Mixin for Strategy Classes
+Gradient Guidance Mixin for Strategy Classes - Weighted Combination Method
 
-This module provides common functionality for gradient-guided sampling
-that can be used across all strategy classes.
+This module provides weighted combination gradient guidance functionality
+where final direction = a * guide_direction + (1-a) * random_direction
 """
 
 import torch
@@ -12,27 +12,28 @@ import math
 
 class GradientGuidanceMixin:
     """
-    Mixin class that provides gradient guidance functionality for optimization strategies.
+    Mixin class that provides weighted combination gradient guidance functionality.
     
-    This mixin adds the ability to use gradient information from the differentiable term1
-    (SWD part) to guide the sampling direction, while maintaining random exploration
-    for the non-differentiable term2.
+    This implementation uses: final_dir = alpha * guide_direction + (1-alpha) * random_direction
+    where guide_direction is the negative gradient of term1 (SWD part) and random_direction
+    is a uniformly sampled random direction.
     """
     
-    def __init__(self, explainer, use_gradient_guidance=False, cone_angle=math.pi/4, random_state=None, **kwargs):
+    def __init__(self, explainer, use_gradient_guidance=False, weight_alpha=0.5, random_state=None, **kwargs):
         """
         Initialize gradient guidance parameters.
         
         Args:
             explainer: The DCE explainer instance
             use_gradient_guidance (bool): Whether to use gradient guidance (default: False)
-            cone_angle (float): Cone angle in radians for guided sampling (default: π/4 = 45°)
+            weight_alpha (float): Weight for combining gradient and random directions (default: 0.5)
+                                 final_dir = alpha * guide_direction + (1-alpha) * random_direction
             random_state: Random state for reproducibility
         """
         # Don't call super().__init__() as this is a mixin
         self.explainer = explainer
         self.use_gradient_guidance = use_gradient_guidance
-        self.cone_angle = cone_angle
+        self.weight_alpha = weight_alpha
         
         # Initialize random state components that might be needed for gradient guidance
         if hasattr(self, '_rng') and hasattr(self, '_torch_rng'):
@@ -88,8 +89,11 @@ class GradientGuidanceMixin:
             grad = torch.autograd.grad(term1, X_temp, create_graph=False, retain_graph=False)[0]
             return grad[:, self.explainer.explain_indices]
     
-    def _sample_in_cone(self, guide_direction, cone_angle, num_features):
-        """Sample directions within a cone around the guide direction"""
+    def _sample_weighted_combination(self, guide_direction, weight_alpha, num_features):
+        """
+        Sample directions using weighted combination method
+        final_dir = alpha * guide_direction + (1-alpha) * random_direction
+        """
         # Normalize guide direction
         guide_direction = guide_direction / (torch.norm(guide_direction, dim=1, keepdim=True) + 1e-8)
         
@@ -103,27 +107,13 @@ class GradientGuidanceMixin:
             random_direction = self._rng.randn(num_features)
             random_direction = random_direction / np.linalg.norm(random_direction)
             
-            # Calculate angle with guide direction
-            cos_angle = np.dot(guide, random_direction)
-            current_angle = np.arccos(np.clip(cos_angle, -1, 1))
+            # Weighted combination: final_dir = alpha * guide_dir + (1-alpha) * random_dir
+            final_direction = weight_alpha * guide + (1 - weight_alpha) * random_direction
             
-            # If angle exceeds cone range, project to cone boundary
-            if current_angle > cone_angle:
-                # Calculate projection direction
-                # Use spherical linear interpolation to adjust direction to cone boundary
-                target_cos = np.cos(cone_angle)
-                
-                # Find component perpendicular to guide_direction
-                parallel_component = np.dot(random_direction, guide) * guide
-                perpendicular_component = random_direction - parallel_component
-                
-                if np.linalg.norm(perpendicular_component) > 1e-8:
-                    perpendicular_component = perpendicular_component / np.linalg.norm(perpendicular_component)
-                    
-                    # Reconstruct direction on cone boundary
-                    random_direction = target_cos * guide + np.sin(cone_angle) * perpendicular_component
+            # Normalize the final direction
+            final_direction = final_direction / np.linalg.norm(final_direction)
             
-            directions.append(torch.from_numpy(random_direction).float().to(self.explainer.device))
+            directions.append(torch.from_numpy(final_direction).float().to(self.explainer.device))
         
         return torch.stack(directions)
     
@@ -147,38 +137,38 @@ class GradientGuidanceMixin:
             grad_term1 = self._compute_term1_gradient(cand, eta)
             guide_direction = -grad_term1  # Negative gradient direction
             
-            # Sample directions within cone region
+            # Sample directions using weighted combination method
             # Only use gradient direction for continuous features
             continuous_guide_direction = guide_direction[:, self.explainer.continuous_indices]
-            cone_directions = self._sample_in_cone(continuous_guide_direction, self.cone_angle, len(self.explainer.continuous_indices))
+            weighted_directions = self._sample_weighted_combination(continuous_guide_direction, self.weight_alpha, len(self.explainer.continuous_indices))
             
             # Apply guided sampling
-            if cone_directions.shape[0] > idx:
+            if weighted_directions.shape[0] > idx:
                 for feat_idx, idx_feat in enumerate(self.explainer.continuous_indices):
-                    if feat_idx < cone_directions.shape[1]:
+                    if feat_idx < weighted_directions.shape[1]:
                         min_val = self.explainer.X_prime[:, idx_feat].min()
                         max_val = self.explainer.X_prime[:, idx_feat].max()
                         
-                        # Use cone sampling direction
-                        direction = cone_directions[idx, feat_idx]
+                        # Use weighted combination direction
+                        direction = weighted_directions[idx, feat_idx]
                         step_size = torch.rand(1, generator=self._torch_rng, device=self.explainer.device) * 0.1
                         
                         # Calculate new value
                         current_val = self.explainer.X_prime[ref_idx, idx_feat]
                         perturbation = direction * step_size * (max_val - min_val)
                         sampled_val = torch.clamp(current_val + perturbation, min_val, max_val)
-                        
-                        cand[idx, idx_feat] = (1 - eta) * self.explainer.X_prime[ref_idx, idx_feat] + eta * sampled_val
+                        cand[idx, idx_feat] = sampled_val
+                        # cand[idx, idx_feat] = (1 - eta) * self.explainer.X_prime[ref_idx, idx_feat] + eta * sampled_val
                     else:
                         # Fallback to random sampling for extra features
                         self._apply_random_sampling_to_feature(cand, eta, ref_idx, idx, idx_feat)
             else:
-                # Fallback to random sampling if cone directions not available
+                # Fallback to random sampling if weighted directions not available
                 for idx_feat in self.explainer.continuous_indices:
                     self._apply_random_sampling_to_feature(cand, eta, ref_idx, idx, idx_feat)
             
             # Print success message when gradient guidance is used
-            # print(f"[{self.__class__.__name__}] Successfully used gradient guidance with cone angle {self.cone_angle:.3f} rad ({math.degrees(self.cone_angle):.1f}°)")
+            # print(f"[{self.__class__.__name__}] Successfully used weighted combination gradient guidance with alpha={self.weight_alpha}")
             return True
             
         except Exception as e:
@@ -193,3 +183,39 @@ class GradientGuidanceMixin:
         rand_val = torch.rand(1, generator=self._torch_rng, device=self.explainer.device)
         sampled_val = min_val + rand_val * (max_val - min_val)
         cand[idx, idx_feat] = (1 - eta) * self.explainer.X_prime[ref_idx, idx_feat] + eta * sampled_val
+    
+    def _apply_gradient_guidance_to_categorical_features(self, cand, eta, ref_idx, idx):
+        """
+        Apply gradient guidance to categorical features using gradient magnitude as sampling weights.
+        """
+        if not self.use_gradient_guidance:
+            return False
+            
+        try:
+            grad_term1 = self._compute_term1_gradient(cand, eta)
+            
+            for feat_idx_position, idx_feat in enumerate(self.explainer.categorical_indices):
+                if idx_feat in self.explainer.explain_indices:
+                    explain_position = self.explainer.explain_indices.index(idx_feat)
+                    grad_magnitude = torch.abs(grad_term1[idx, explain_position])
+                    
+                    unique_vals = torch.unique(self.explainer.X_prime[:, idx_feat])
+                    
+                    if len(unique_vals) > 1:
+                        # Use gradient magnitude to create sampling probabilities
+                        probs = torch.ones(len(unique_vals), device=self.explainer.device)
+                        probs = probs * (1.0 + float(grad_magnitude))  # Higher gradient = more exploration
+                        probs = probs / probs.sum()
+                        
+                        sampled_idx = torch.multinomial(probs, 1, generator=self._torch_rng).item()
+                        sampled_val = unique_vals[sampled_idx]
+                    else:
+                        sampled_val = unique_vals[0]
+                    cand[idx, idx_feat] = sampled_val
+                    # cand[idx, idx_feat] = (1 - eta) * self.explainer.X_prime[ref_idx, idx_feat] + eta * sampled_val
+            
+            return True
+            
+        except Exception as e:
+            print(f"[{self.__class__.__name__}] Categorical gradient guidance failed: {str(e)}")
+            return False

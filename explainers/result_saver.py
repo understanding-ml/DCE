@@ -21,7 +21,7 @@ class ResultSaver:
         self.full_dce_params = {}
         self.full_strategy_params = {}
         
-    def setup_save_directory(self, dataset_name, model_name, strategy, n_proj, delta, U_1, U_2, l, r, max_iter, top_k, seed):
+    def setup_save_directory(self, dataset_name, model_name, strategy, n_proj, delta, U_1, U_2, l, r, max_iter, top_k, seed, gradient_method="cone_sampling"):
         """Setup nested directory structure for saving results"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
@@ -73,11 +73,15 @@ class ResultSaver:
         if hasattr(strategy, 'sigma_decay'):
             strategy_params.append(f"sd={strategy.sigma_decay}")
         
-        # Add angle parameter for gradient guidance (if enabled)
+        # Add gradient guidance parameters (if enabled)
         if hasattr(strategy, 'use_gradient_guidance') and strategy.use_gradient_guidance:
             if hasattr(strategy, 'cone_angle'):
                 angle_degrees = round(strategy.cone_angle * 180 / 3.14159, 1)  # Convert to degrees
                 strategy_params.append(f"angle={angle_degrees}")
+            elif hasattr(strategy, 'weight_alpha'):
+                strategy_params.append(f"alpha={strategy.weight_alpha}")
+            elif hasattr(strategy, 'noise_beta'):
+                strategy_params.append(f"beta={strategy.noise_beta}")
         
         strategy_param_str = ",".join(strategy_params) if strategy_params else "default"
         
@@ -85,15 +89,25 @@ class ResultSaver:
         dce_params = f"np={n_proj},d={delta},u1={U_1},u2={U_2},l={l},r={r},mi={max_iter},tk={top_k}"
         
         # Create nested directory structure under Results folder
+        # save_path = os.path.join(
+        #     "Results",
+        #     dataset_name or "unknown_dataset",
+        #     model_name or "unknown_model", 
+        #     f"DCE_{dce_params}",
+        #     f"{gradient_method}_{strategy_name}_{strategy_param_str}",
+        #     f"seed_{seed}_{timestamp}"
+        # )
+
         save_path = os.path.join(
             "Results",
             dataset_name or "unknown_dataset",
             model_name or "unknown_model", 
             f"DCE_{dce_params}",
-            f"{strategy_name}_{strategy_param_str}",
+            "_".join(filter(None, [gradient_method, strategy_name, strategy_param_str])),
             f"seed_{seed}_{timestamp}"
         )
-        
+
+
         # Create directory if it doesn't exist
         os.makedirs(save_path, exist_ok=True)
         print(f"Results will be saved to: {save_path}")
@@ -158,11 +172,15 @@ class ResultSaver:
         if hasattr(strategy, 'sigma_decay'):
             params['sigma_decay'] = strategy.sigma_decay
         
-        # Add angle parameter for gradient guidance (if enabled) - but exclude use_gradient_guidance itself
+        # Add gradient guidance parameters (if enabled) - but exclude use_gradient_guidance itself
         if hasattr(strategy, 'use_gradient_guidance') and strategy.use_gradient_guidance:
             if hasattr(strategy, 'cone_angle'):
                 params['cone_angle'] = strategy.cone_angle
                 params['angle_degrees'] = round(strategy.cone_angle * 180 / 3.14159, 1)
+            elif hasattr(strategy, 'weight_alpha'):
+                params['weight_alpha'] = strategy.weight_alpha
+            elif hasattr(strategy, 'noise_beta'):
+                params['noise_beta'] = strategy.noise_beta
         
         return params
     
@@ -242,7 +260,7 @@ class ResultSaver:
                         'mpo': 'mutation_prob_cont', 'mns': 'mutation_noise_scale', 'T0': 'T0',
                         'Tf': 'T_final', 'td': 'temp_decay', 'swarm': 'swarm_size', 'w': 'w',
                         'c1': 'c1', 'c2': 'c2', 'F': 'F', 'CR': 'CR', 'pop': 'population_size',
-                        'sd': 'sigma_decay', 'angle': 'angle_degrees'
+                        'sd': 'sigma_decay', 'angle': 'angle_degrees', 'alpha': 'weight_alpha', 'beta': 'noise_beta'
                     }
                 }
             }

@@ -4,12 +4,12 @@ import math
 from .gradient_guidance_mixin import GradientGuidanceMixin
 
 class MonteCarloStrategy(GradientGuidanceMixin):
-    def __init__(self, explainer, random_state=None, use_gradient_guidance=False, cone_angle=math.pi/4):
+    def __init__(self, explainer, random_state=None, use_gradient_guidance=False, weight_alpha=0.5):
         # Initialize base attributes first
         self.explainer = explainer
         
         # Initialize gradient guidance mixin
-        GradientGuidanceMixin.__init__(self, explainer, use_gradient_guidance=use_gradient_guidance, cone_angle=cone_angle, random_state=random_state)
+        GradientGuidanceMixin.__init__(self, explainer, use_gradient_guidance=use_gradient_guidance, weight_alpha=weight_alpha, random_state=random_state)
         
         self.random_state = random_state
         self._rng = np.random.RandomState(random_state)
@@ -47,11 +47,17 @@ class MonteCarloStrategy(GradientGuidanceMixin):
                 # Select a random row from X_prime for reference
                 ref_idx = self._rng.randint(explainer.X_prime.shape[0])
                     
-                # Categorical perturbation
-                for idx_feat in explainer.categorical_indices:
-                    unique_vals = torch.unique(explainer.X_prime[:, idx_feat])
-                    sampled_val = unique_vals[self._rng.randint(len(unique_vals))]  # numpy sampling
-                    cand[idx, idx_feat] = (1 - eta) * explainer.X_prime[ref_idx, idx_feat] + eta * sampled_val
+                # Categorical perturbation with gradient guidance
+                categorical_guidance_applied = False
+                if self.use_gradient_guidance:
+                    categorical_guidance_applied = self._apply_gradient_guidance_to_categorical_features(cand, eta, ref_idx, idx)
+                
+                if not categorical_guidance_applied:
+                    # Original categorical perturbation (fallback)
+                    for idx_feat in explainer.categorical_indices:
+                        unique_vals = torch.unique(explainer.X_prime[:, idx_feat])
+                        sampled_val = unique_vals[self._rng.randint(len(unique_vals))]  # numpy sampling
+                        cand[idx, idx_feat] = (1 - eta) * explainer.X_prime[ref_idx, idx_feat] + eta * sampled_val
 
                 # Continuous perturbation with optional gradient guidance
                 if self.use_gradient_guidance:

@@ -9,6 +9,7 @@ from explainers.visualization import CallbackVisualizer
 from explainers.result_saver import ResultSaver
 import torch.optim as optim
 import math
+import time
 
 
 class DCEExplainerGradient(BaseExplainer):
@@ -94,9 +95,15 @@ class DCEExplainerGradient(BaseExplainer):
             mock_strategy = GradientStrategy()
             mock_strategy.__class__.__name__ = "GradientStrategy"
             
+            # self.save_dir = self.result_saver.setup_save_directory(
+            #     dataset_name, model_name, mock_strategy, n_proj, delta, U_1, U_2, l, r, max_iter, 1, seed
+            # )
             self.save_dir = self.result_saver.setup_save_directory(
-                dataset_name, model_name, mock_strategy, n_proj, delta, U_1, U_2, l, r, max_iter, 1, seed
+                dataset_name, model_name, mock_strategy, n_proj, delta, U_1, U_2, l, r,
+                max_iter, 1, seed,
+                gradient_method=""
             )
+
             # Override the DCE_ prefix to DCE_gradient_
             import os
             old_save_dir = self.save_dir

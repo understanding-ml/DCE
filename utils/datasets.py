@@ -403,11 +403,24 @@ class dataset_loader:
                 )
             )
 
-        x_means, x_stds = x_train.mean(axis=0), x_train.std(axis=0)
+        # Convert boolean/object columns to numeric for statistical calculations
+        # This handles datasets like COMPAS that have boolean one-hot encoded features
+        x_train_numeric = x_train.astype(float)
+        x_test_numeric = x_test.astype(float)
+        
+        # Also ensure y_train and y_test are proper numeric types (not object)
+        y_train = y_train.astype(float)
+        y_test = y_test.astype(float)
+        
+        x_means, x_stds = x_train_numeric.mean(axis=0), x_train_numeric.std(axis=0)
 
         if normalise:
-            x_train = (x_train - x_means) / x_stds
-            x_test = (x_test - x_means) / x_stds
+            x_train = (x_train_numeric - x_means) / x_stds
+            x_test = (x_test_numeric - x_means) / x_stds
+        else:
+            # If not normalizing, use the numeric versions to maintain consistency
+            x_train = x_train_numeric
+            x_test = x_test_numeric
 
         if return_mean_std:
             return x_train, y_train, x_test, y_test, x_means, x_stds

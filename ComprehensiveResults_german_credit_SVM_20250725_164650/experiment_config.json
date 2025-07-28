@@ -1,0 +1,54 @@
+{
+  "dataset_name": "german_credit",
+  "model_name": "SVM",
+  "seed": 42,
+  "sample_num": 50,
+  "dce_params": {
+    "X_init": true,
+    "n_proj": 5,
+    "delta": 0.1,
+    "U_1": 0.5,
+    "U_2": 0.3,
+    "l": 0.2,
+    "r": 1.0,
+    "max_iter": 50,
+    "top_k": 1,
+    "callback": "full",
+    "save_results": true
+  },
+  "strategy_configs": {
+    "MonteCarlo": {},
+    "Genetic": {
+      "crossover_prob": 0.8,
+      "gene_swap_prob": 0.5,
+      "mutation_prob_cat": 0.3,
+      "mutation_prob_cont": 0.8,
+      "mutation_noise_scale": 0.1
+    },
+    "SimulatedAnnealing": {
+      "T0": 1.5,
+      "T_final": 0.01
+    },
+    "Bayesian": {},
+    "DifferentialEvolution": {
+      "F": 0.5,
+      "CR": 0.9
+    }
+  },
+  "gradient_configs": {
+    "original": {},
+    "cone_sampling": {
+      "use_gradient_guidance": true,
+      "cone_angle": 0.7853981633974483
+    },
+    "weighted_combination": {
+      "use_gradient_guidance": true,
+      "weight_alpha": 0.7
+    },
+    "noisy_gradient": {
+      "use_gradient_guidance": true,
+      "noise_beta": 0.1
+    }
+  },
+  "timestamp": "20250725_164650"
+}

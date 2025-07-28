@@ -46,7 +46,7 @@ pip install -r requirements.txt
 from dataset.german_credit import GermanCreditData
 from explainers.model import Model
 from explainers.nondifferentiable import DCENonDifferentiable
-from explainers.strategies.monte_carlo import MonteCarloStrategy
+from explainers.cone_sampling.monte_carlo import MonteCarloStrategy
 
 # Load dataset
 data = GermanCreditData()
