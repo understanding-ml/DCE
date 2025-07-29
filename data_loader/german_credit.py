@@ -5,23 +5,24 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 
-class CompasData:
-    def __init__(self, test_size=0.2, seed=42, sample_num=50):
-        self.name = "compas"
+class GermanCreditData:
+    def __init__(self, test_size=0.2, seed = 42, sample_num=50):
+        self.name = "credit"
         self.seed = seed 
         self.test_size = test_size
         self.random_state = seed
         self.sample_num = sample_num
 
-        self.target_name = 'two_year_recid'
+        self.target_name = 'Risk'
         self.features = [
-            'age', 'sex', 'race', 'priors_count', 'c_charge_degree', 'decile_score'
+            'Age', 'Sex', 'Job', 'Housing', 'Saving accounts', 'Checking account',
+            'Credit amount', 'Duration', 'Purpose'
         ]
         self.categorical_columns = [
-            'sex', 'race', 'c_charge_degree'
+            'Sex', 'Job', 'Housing', 'Saving accounts', 'Checking account', 'Purpose'
         ]
         self.continuous_columns = [
-            'age', 'priors_count', 'decile_score'
+            'Age', 'Credit amount', 'Duration'
         ]
         self.explain_columns = self.features.copy()
 
@@ -31,34 +32,23 @@ class CompasData:
         self._standardize()
 
     def _load_data(self):
-        self.df_raw = pd.read_csv("data/compas/compas.csv")
+        self.df_raw = pd.read_csv("data/german_credit/german_credit_data.csv")
         self.df = self.df_raw.copy()
 
     def _preprocess(self):
-        # Select relevant columns
-        relevant_cols = self.features + [self.target_name]
-        self.df = self.df[relevant_cols].copy()
-        
-        # Handle missing values
-        self.df = self.df.dropna()
-        
-        # Encode categorical variables
+        self.df['Risk'] = self.df['Risk'].map({'good': 0, 'bad': 1}).astype(int)
         label_encoder = LabelEncoder()
         self.label_mappings = {}
 
-        for column in self.categorical_columns:
-            if column in self.df.columns:
-                self.df[column] = self.df[column].astype(str)
+        for column in self.df.columns:
+            if column != self.target_name and self.df[column].dtype == 'object':
+                self.df[column] = self.df[column].fillna('Unknown')
                 self.df[column] = label_encoder.fit_transform(self.df[column])
                 self.label_mappings[column] = dict(zip(label_encoder.classes_, range(len(label_encoder.classes_))))
 
-        # Fill any remaining missing values with median for continuous columns
-        for column in self.continuous_columns:
-            if column in self.df.columns and self.df[column].isna().any():
+        for column in self.df.columns:
+            if self.df[column].isna().any():
                 self.df[column].fillna(self.df[column].median(), inplace=True)
-
-        # Ensure target is binary (0 or 1)
-        self.df[self.target_name] = self.df[self.target_name].astype(int)
 
         self.X = self.df[self.features].copy()
         self.y = self.df[self.target_name]
@@ -90,8 +80,10 @@ class CompasData:
         self.df_explain = self.X_test.sample(self.sample_num, random_state=self.seed)
         return self.df_explain.copy()
 
+
     def get_y_target(self):
         torch.manual_seed(self.seed)
+        # y_target = torch.full((self.sample_num,), 1.0).to(torch.float32)
         y_target = torch.distributions.Beta(0.1, 0.9).sample((self.sample_num,)).to(torch.float32)
         return y_target
 

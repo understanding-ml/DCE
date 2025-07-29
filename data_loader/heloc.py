@@ -104,8 +104,8 @@ class HelocData:
     def get_y_target(self):
         torch.manual_seed(self.seed)
         # Use Beta distribution for more realistic and diverse targets (faster convergence)
-        # y_target = torch.distributions.Beta(0.1, 0.9).sample((self.sample_num,)).to(torch.float32)
-        y_target = torch.full((self.sample_num,), 1.0).to(torch.float32)  # All 1.0 targets (slower convergence)
+        y_target = torch.distributions.Beta(0.1, 0.9).sample((self.sample_num,)).to(torch.float32)
+        # y_target = torch.full((self.sample_num,), 1.0).to(torch.float32)  # All 1.0 targets (slower convergence)
         return y_target
 
     def get_X_init(self):

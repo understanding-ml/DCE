@@ -130,6 +130,8 @@ class DCEExplainerGradient(BaseExplainer):
             callback = CallbackVisualizer(mode="full", model=self.model, data=self.data,
                                         explain_columns=explain_columns, y_target=y_target, max_iter=max_iter,
                                         save_dir=self.save_dir)
+        else:
+            callback = None
 
         self.explain_columns = explain_columns
         self.explain_indices = [df_factual.columns.get_loc(col) for col in explain_columns]
@@ -168,29 +170,9 @@ class DCEExplainerGradient(BaseExplainer):
         self.term2 = torch.tensor(0.0, dtype=torch.float, device=self.device)
         self.X_prev = self.X.clone().detach()  # For tracking changes
 
-        # Save initial data files (matching nondifferentiable.py)
-        if save_results and self.save_dir:
-            import os
-            os.makedirs(self.save_dir, exist_ok=True)
-            
-            # Save x_true (factual data without noise)
-            df_factual.to_csv(os.path.join(self.save_dir, "x_true.csv"), index=False)
-            
-            # Save y_true (actual predictions for factual data)
-            y_true = self.model(self.X_prime).detach().cpu().numpy()
-            pd.DataFrame(y_true, columns=['y_true']).to_csv(os.path.join(self.save_dir, "y_true.csv"), index=False)
-            
-            # Save y_target
-            if isinstance(y_target, torch.Tensor):
-                y_target_np = y_target.detach().cpu().numpy()
-            else:
-                y_target_np = y_target
-            pd.DataFrame(y_target_np, columns=['y_target']).to_csv(os.path.join(self.save_dir, "y_target.csv"), index=False)
-            
-            print(f"📁 Initial data saved:")
-            print(f"   - x_true.csv: {df_factual.shape}")
-            print(f"   - y_true.csv: {y_true.shape}")
-            print(f"   - y_target.csv: {y_target_np.shape}")
+        # Save initial data files (x_true, y_true, y_target)
+        if save_results and self.result_saver:
+            self.result_saver.save_initial_data(self, df_factual, y_target)
 
         print("Optimization started")
         for i in range(max_iter):
@@ -286,8 +268,8 @@ class DCEExplainerGradient(BaseExplainer):
         df_result = pd.DataFrame(result_X.detach().cpu().numpy(), columns=df_factual.columns)
         
         # Apply data recovery if possible
-        if hasattr(self.data, 'mean') and hasattr(self.data, 'std'):
-            df_result = self._recover_data(df_result, df_factual.columns)
+        if hasattr(self.data, 'mean') and hasattr(self.data, 'std') and self.result_saver:
+            df_result = self.result_saver.recover_data(df_result, df_factual.columns, self.data)
             
         return df_result
 
@@ -467,42 +449,3 @@ class DCEExplainerGradient(BaseExplainer):
         eta_proportion = b / (a + b) if a < 0 else a / (a + b)
         return l + eta_proportion * (r - l)
     
-    def _recover_data(self, df, columns):
-        """Recover (denormalize) data using dataset statistics"""
-        try:
-            if not hasattr(self.data, 'mean') or not hasattr(self.data, 'std'):
-                return df
-                
-            # Create a copy to avoid modifying original
-            df_recovered = df.copy()
-            
-            # Denormalize using mean and std
-            if hasattr(self.data, 'explain_columns'):
-                explain_cols = self.data.explain_columns
-                for col in explain_cols:
-                    if col in df_recovered.columns:
-                        mean_val = self.data.mean[col] if hasattr(self.data.mean, '__getitem__') else getattr(self.data.mean, col, 0)
-                        std_val = self.data.std[col] if hasattr(self.data.std, '__getitem__') else getattr(self.data.std, col, 1)
-                        df_recovered[col] = df_recovered[col] * std_val + mean_val
-            
-            # Recover data types if available
-            if hasattr(self.data, 'df'):
-                dtype_dict = self.data.df.dtypes.apply(lambda x: x.name).to_dict()
-                df_recovered = self._recovering_types(df_recovered, dtype_dict)
-            
-            return df_recovered
-            
-        except Exception as e:
-            print(f"Warning: Could not recover data: {str(e)}")
-            return df
-            
-    def _recovering_types(self, df_to_recover, dtype_dict):
-        """Recover original data types"""
-        df_recovered = df_to_recover.copy()
-        for k, v in dtype_dict.items():
-            if k in df_recovered.columns:
-                if v.startswith('int'):  
-                    df_recovered[k] = df_recovered[k].round().astype(v)
-                else: 
-                    df_recovered[k] = df_recovered[k].astype(v)
-        return df_recovered

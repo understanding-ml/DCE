@@ -23,6 +23,9 @@ class CallbackVisualizer:
         self.max_iter = max_iter
         self.output_dir = None
         self.parent_save_dir = save_dir  # New parameter for integration with save system
+        
+        # Get target name from data if available, otherwise default to 'Risk'
+        self.target_name = getattr(data, 'target_name', 'Risk') if data else 'Risk'
 
     def set_mode(self, mode):
         self.mode = mode
@@ -63,10 +66,10 @@ class CallbackVisualizer:
         # print(f"🎯 Target info: shape={y_target.shape}, min={y_target.min():.3f}, max={y_target.max():.3f}")
         # print(f"📊 Factual Risk shape: {y_factual.shape}, Counter Risk shape: {y_counter.shape}")
 
-        df_factual['Risk'] = y_factual
-        df_counter['Risk'] = y_counter
+        df_factual[self.target_name] = y_factual
+        df_counter[self.target_name] = y_counter
 
-        all_features = self.explain_columns + ['Risk']
+        all_features = self.explain_columns + [self.target_name]
         num_cols = 3
         num_rows = math.ceil(len(all_features) / num_cols)
         fig, axes = plt.subplots(num_rows, num_cols, figsize=(6 * num_cols, 6 * num_rows))
@@ -80,7 +83,7 @@ class CallbackVisualizer:
                 bins = np.arange(fx.min(), fx.max() + 2)
                 ax.bar(bins[:-1] - 0.175, np.histogram(fx, bins=bins)[0], width=0.35, label="Fact.", color="blue")
                 ax.bar(bins[:-1] + 0.175, np.histogram(cx, bins=bins)[0], width=0.35, label="C.Fact.", color="red")
-            elif feature == "Risk":
+            elif feature == self.target_name:
                 ax.plot(np.sort(fx), np.linspace(0, 1, len(fx)), label="Factual", color="blue")
                 ax.plot(np.sort(cx), np.linspace(0, 1, len(cx)), label="Counterfactual", color="red")
                 # Always show target curve if available

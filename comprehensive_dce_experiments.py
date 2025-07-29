@@ -30,11 +30,11 @@ from explainers.nondifferentiable import DCENonDifferentiable
 from explainers.distances import SlicedWassersteinDivergence, WassersteinDivergence
 
 # Dataset imports
-from dataset.cardio import CardioData
-from dataset.german_credit import GermanCreditData
-from dataset.hotel_booking import HotelBookingData
-from dataset.heloc import HelocData
-from dataset.compas import CompasData
+from data_loader.cardio import CardioData
+from data_loader.german_credit import GermanCreditData
+from data_loader.hotel_booking import HotelBookingData
+from data_loader.heloc import HelocData
+from data_loader.compas import CompasData
 
 # Model imports
 from models.svm import LinearSVM

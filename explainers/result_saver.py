@@ -276,32 +276,80 @@ class ResultSaver:
             import traceback
             traceback.print_exc()
     
-    def _recover_data(self, df, columns, data):
-        """Recover data from normalized form"""
+    def recover_data(self, df, columns, data):
+        """Recover (denormalize) data using dataset statistics"""
         try:
-            # Create a copy to avoid modifying the original
-            recovered_df = df.copy()
-            
-            # Only apply recovery if we have the necessary attributes
-            if hasattr(data, 'mean') and hasattr(data, 'std'):
-                # Convert to numpy if it's a tensor
-                if hasattr(data.mean, 'numpy'):
-                    mean_vals = data.mean.numpy()
-                    std_vals = data.std.numpy()
-                else:
-                    mean_vals = data.mean
-                    std_vals = data.std
+            if not hasattr(data, 'mean') or not hasattr(data, 'std'):
+                return df
                 
-                # Apply inverse normalization: x_original = x_normalized * std + mean
-                for i, col in enumerate(columns):
-                    if i < len(mean_vals) and i < len(std_vals):
-                        recovered_df[col] = df[col] * std_vals[i] + mean_vals[i]
+            # Create a copy to avoid modifying original
+            df_recovered = df.copy()
             
-            return recovered_df
+            # Denormalize using mean and std
+            if hasattr(data, 'explain_columns'):
+                explain_cols = data.explain_columns
+                for col in explain_cols:
+                    if col in df_recovered.columns:
+                        mean_val = data.mean[col] if hasattr(data.mean, '__getitem__') else getattr(data.mean, col, 0)
+                        std_val = data.std[col] if hasattr(data.std, '__getitem__') else getattr(data.std, col, 1)
+                        df_recovered[col] = df_recovered[col] * std_val + mean_val
+            
+            # Recover data types if available
+            if hasattr(data, 'df'):
+                dtype_dict = data.df.dtypes.apply(lambda x: x.name).to_dict()
+                df_recovered = self.recovering_types(df_recovered, dtype_dict)
+            
+            return df_recovered
+            
         except Exception as e:
-            print(f"Warning: Could not recover data: {e}")
+            print(f"Warning: Could not recover data: {str(e)}")
             return df
     
+    def recovering_types(self, df_to_recover, dtype_dict):
+        """Recover original data types"""
+        df_recovered = df_to_recover.copy()
+        for k, v in dtype_dict.items():
+            if k in df_recovered.columns:
+                if v.startswith('int'):  
+                    df_recovered[k] = df_recovered[k].round().astype(v)
+                else: 
+                    df_recovered[k] = df_recovered[k].astype(v)
+        return df_recovered
+    
+    def save_initial_data(self, explainer, df_factual, y_target):
+        """Save initial data before optimization starts"""
+        if not self.save_dir:
+            print("Warning: save_dir not set, skipping initial data save")
+            return
+            
+        try:
+            # Create directory if it doesn't exist
+            os.makedirs(self.save_dir, exist_ok=True)
+            
+            # Save x_true (factual data without noise)
+            df_factual.to_csv(os.path.join(self.save_dir, "x_true.csv"), index=False)
+            
+            # Save y_true (actual predictions for factual data)
+            y_true = explainer.model(explainer.X_prime).detach().cpu().numpy()
+            pd.DataFrame(y_true, columns=['y_true']).to_csv(os.path.join(self.save_dir, "y_true.csv"), index=False)
+            
+            # Save y_target
+            if isinstance(y_target, torch.Tensor):
+                y_target_np = y_target.detach().cpu().numpy()
+            else:
+                y_target_np = y_target
+            pd.DataFrame(y_target_np, columns=['y_target']).to_csv(os.path.join(self.save_dir, "y_target.csv"), index=False)
+            
+            print(f"📁 Initial data saved:")
+            print(f"   - x_true.csv: {df_factual.shape}")
+            print(f"   - y_true.csv: {y_true.shape}")
+            print(f"   - y_target.csv: {y_target_np.shape}")
+            
+        except Exception as e:
+            print(f"Error saving initial data: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
     def get_visualization_dir(self):
         """Get the visualization directory path"""
         if self.save_dir:
