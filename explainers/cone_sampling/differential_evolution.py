@@ -1,25 +1,33 @@
 import torch
 import numpy as np
 import math
-from .gradient_guidance_mixin import GradientGuidanceMixin
+from .gradient_guidance_mixin import GradientGuidanceMixin, CategoricalEmbedding
 
 class DifferentialEvolutionStrategy(GradientGuidanceMixin):
-    def __init__(self, explainer, F=0.5, CR=0.9, use_gradient_guidance=False, cone_angle=math.pi/4, random_state=None):
+    def __init__(self, explainer, F=0.5, CR=0.9, cone_angle=math.pi/4, random_state=None, 
+                 use_cone_sampling_categorical=True, use_cone_sampling_continuous=True,
+                 categorical_step=1.2, continuous_step=0.1, temperature=2.0):
         # Initialize base attributes first
         self.explainer = explainer
         
-        # Initialize gradient guidance mixin
-        GradientGuidanceMixin.__init__(self, explainer, use_gradient_guidance=use_gradient_guidance, cone_angle=cone_angle, random_state=random_state)
+        # Initialize gradient guidance mixin (always enabled)
+        GradientGuidanceMixin.__init__(self, explainer, cone_angle=cone_angle, random_state=random_state, 
+                                      use_cone_sampling_categorical=use_cone_sampling_categorical, 
+                                      use_cone_sampling_continuous=use_cone_sampling_continuous)
         self.F = F  # 差分缩放因子
         self.CR = CR  # 交叉概率
         self.random_state = random_state
         self._rng = np.random.RandomState(random_state)
         self._torch_rng = torch.Generator(device=explainer.device).manual_seed(random_state or 0)
+        
+        # Store new parameters
+        self.categorical_step = categorical_step
+        self.continuous_step = continuous_step
+        self.temperature = temperature
+        
+        # Cache embedding layers to avoid recreating them every time
+        self._embedding_cache = {}
 
-    def reseed(self, seed):
-        self.random_state = seed
-        self._rng = np.random.RandomState(seed)
-        self._torch_rng = torch.Generator(device=self.explainer.device).manual_seed(seed)
 
     def generate_new_X(self, eta, num_trials, top_k=1):
         explainer = self.explainer
@@ -57,20 +65,126 @@ class DifferentialEvolutionStrategy(GradientGuidanceMixin):
                         if self._rng.rand() < self.CR:
                             trial[j] = mutant[j]
 
-                    # Apply gradient guidance for continuous features if enabled
-                    if self.use_gradient_guidance:
-                        X_candidate = explainer.X.clone()
-                        new_candidate_temp = current_candidate.clone()
-                        for pos, feat in enumerate(explainer.explain_indices):
-                            new_candidate_temp[feat] = trial[pos]
-                        X_candidate = explainer._update_row(X_candidate, idx, new_candidate_temp)
-                        ref_idx = 0  # Use first reference point
-                        self._apply_gradient_guidance_to_continuous_features(X_candidate, eta, ref_idx, idx)
-                        # Update trial with guided values for continuous features
-                        for pos, feat in enumerate(explainer.explain_indices):
-                            if feat in explainer.continuous_indices:
-                                trial[pos] = X_candidate[idx, feat]
+                    # Apply gradient-guided sampling
+                    X_candidate = explainer.X.clone()
+                    new_candidate_temp = current_candidate.clone()
+                    for pos, feat in enumerate(explainer.explain_indices):
+                        new_candidate_temp[feat] = trial[pos]
+                    X_candidate = explainer._update_row(X_candidate, idx, new_candidate_temp)
+                    
+                    ref_idx = 0  # Use first reference point for DE
+                    
+                    # Compute gradient once for both categorical and continuous features
+                    grad_term1 = self._compute_term1_gradient(X_candidate, eta)
+                    
+                    # Categorical perturbation: choose between cone sampling and original random sampling
+                    for idx_feat in explainer.categorical_indices:
+                        if idx_feat not in explainer.explain_indices:
+                            continue
+                        
+                        if not self.use_cone_sampling_categorical:
+                            # Original random sampling for categorical features
+                            unique_vals = torch.unique(explainer.X_prime[:, idx_feat])
+                            sampled_val = unique_vals[self._rng.randint(len(unique_vals))]
+                            X_candidate[idx, idx_feat] = (1 - eta) * explainer.X_prime[ref_idx, idx_feat] + eta * sampled_val
+                            continue
+                        
+                        # Cone sampling for categorical features (original algorithm)
+                        # Get unique values for this categorical feature
+                        unique_vals = torch.unique(explainer.X_prime[:, idx_feat])
+                        
+                        # Create or get cached embedding layer
+                        cache_key = f"feat_{idx_feat}_{len(unique_vals)}"
+                        if cache_key not in self._embedding_cache:
+                            embedding_layer = CategoricalEmbedding(unique_vals, embed_dim=None, random_state=self.random_state)
+                            self._embedding_cache[cache_key] = embedding_layer
+                        else:
+                            embedding_layer = self._embedding_cache[cache_key]
+                        
+                        # Map current candidate value to nearest valid categorical value (preserves optimization continuity)
+                        current_val = embedding_layer.map_to_nearest_category(X_candidate[idx, idx_feat])
+                        current_embedding = embedding_layer.encode(current_val)
 
+                        
+                        # Get gradient information for this feature
+                        feat_pos = explainer.explain_indices.index(idx_feat)
+                        grad_scalar = grad_term1[idx, feat_pos].item()
+                        
+                        # Build numerical direction in embedding space
+                        sorted_vals = torch.sort(unique_vals)[0]
+                        current_idx = torch.where(sorted_vals == current_val)[0][0]
+                        
+                        # Calculate embedding differences between adjacent categories to build numerical direction
+                        direction_vectors = []
+                        if current_idx < len(sorted_vals) - 1:  
+                            higher_embed = embedding_layer.encode(sorted_vals[current_idx + 1])
+                            direction_vectors.append(higher_embed - current_embedding)
+                        if current_idx > 0: 
+                            lower_embed = embedding_layer.encode(sorted_vals[current_idx - 1])
+                            direction_vectors.append(current_embedding - lower_embed)
+                        
+                        if direction_vectors:
+                            value_direction = torch.stack(direction_vectors).mean(0)
+                            value_direction = value_direction / (torch.norm(value_direction) + 1e-8)
+                        else:
+                            value_direction = torch.zeros(embedding_layer.embed_dim)
+                        
+                        # Select direction based on gradient
+                        if grad_scalar < 0:  # Increasing feature value is beneficial
+                            guide_direction = value_direction
+                        else:  # Decreasing feature value is beneficial
+                            guide_direction = -value_direction
+                        
+                        # Use random direction as fallback if guide_direction is zero
+                        if torch.norm(guide_direction) < 1e-8:
+                            guide_direction = torch.randn(embedding_layer.embed_dim, generator=self._torch_rng)
+                            guide_direction = guide_direction / (torch.norm(guide_direction) + 1e-8)
+                        
+                        # Sample within cone
+                        cone_dir = self._sample_in_cone(guide_direction.unsqueeze(0), self.cone_angle, embedding_layer.embed_dim)[0]
+                        
+                        # Calculate perturbation step size - increase to ensure crossing category boundaries
+                        base_step_size = 1.2
+                        step_size = torch.rand(1, generator=self._torch_rng) * base_step_size
+                        perturbation = cone_dir * step_size
+                        new_embedding = current_embedding + perturbation
+                        
+                        # Map back to categorical value using temperature-based sampling
+                        # Use temperature parameter to control sampling randomness: higher temperature allows more suboptimal choices
+                        temperature = 2.0  # Moderate temperature to balance exploration and exploitation
+                        
+                        new_categorical_val = embedding_layer.decode(new_embedding, temperature=temperature, random_generator=self._torch_rng)
+                        X_candidate[idx, idx_feat] = new_categorical_val
+
+                    # Continuous perturbation: choose between cone sampling and original random sampling
+                    if self.use_cone_sampling_continuous:
+                        # Cone-based gradient guidance (original algorithm)
+                        guide_direction = -grad_term1[:, explainer.explain_indices]
+                        cone_dir = self._sample_in_cone(guide_direction, self.cone_angle, len(explainer.explain_indices))
+
+                        for idx_feat in explainer.continuous_indices:
+                            # Find the correct position in explain_indices for this continuous feature
+                            explain_pos = explainer.explain_indices.index(idx_feat)
+                            min_val = explainer.X_prime[:, idx_feat].min()
+                            max_val = explainer.X_prime[:, idx_feat].max()
+                            direction = cone_dir[idx, explain_pos]
+                            step = torch.rand(1, generator=self._torch_rng, device=explainer.device) * self.continuous_step
+                            perturbation = direction * step * (max_val - min_val)
+                            X_candidate[idx, idx_feat] = torch.clamp(explainer.X_prime[ref_idx, idx_feat] + perturbation, min_val, max_val)
+                    else:
+                        # Original random sampling for continuous features
+                        for idx_feat in explainer.continuous_indices:
+                            min_val = explainer.X_prime[:, idx_feat].min()
+                            max_val = explainer.X_prime[:, idx_feat].max()
+                            rand_val = torch.rand(1, generator=self._torch_rng, device=explainer.device)
+                            sampled_val = min_val + rand_val * (max_val - min_val)
+                            X_candidate[idx, idx_feat] = (1 - eta) * explainer.X_prime[ref_idx, idx_feat] + eta * sampled_val
+                    
+                    # Update trial vector with guided values
+                    for pos, feat in enumerate(explainer.explain_indices):
+                        trial[pos] = X_candidate[idx, feat]
+
+                    # Ensure categorical values are valid
                     for feat in explainer.categorical_indices:
                         if feat in explainer.explain_indices:
                             pos = explainer.explain_indices.index(feat)

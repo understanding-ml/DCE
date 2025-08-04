@@ -35,7 +35,7 @@ class CompasData:
         ]
         self.continuous_columns = ['Priors_Count', 'Time_Served']
         self.explain_columns = self.features.copy()
-
+        self.feature_names = self.features.copy()
         self._load_data()
         self._preprocess()
         self._split()

@@ -35,9 +35,7 @@ class DCENonDifferentiable(BaseExplainer):
         y_target=None,
         strategy=None,
         X_init=True,
-        lr=0.1,
-        init_eta=0.5,
-        n_proj=50,
+        n_proj=10,
         delta=0.1,
         costs_vector=None,
         U_1=0.5,
@@ -51,7 +49,6 @@ class DCENonDifferentiable(BaseExplainer):
         bootstrap=True,
         callback=None,
         top_k=1,
-        tol=1e-6,
         save_results=True,
         dataset_name=None,
         model_name=None,
@@ -88,7 +85,7 @@ class DCENonDifferentiable(BaseExplainer):
         if save_results:
             self.result_saver = ResultSaver()
             self.save_dir = self.result_saver.setup_save_directory(
-                dataset_name, model_name, strategy, n_proj, delta, U_1, U_2, l, r, max_iter, top_k, seed, gradient_method
+                dataset_name, model_name, strategy, n_proj, delta, U_1, U_2, l, r, max_iter, top_k, seed, gradient_method, num_trials
             )
         else:
             self.result_saver = None
@@ -136,7 +133,6 @@ class DCENonDifferentiable(BaseExplainer):
         self.best_Q = torch.tensor(torch.inf, dtype=torch.float, device=self.device)
         self.final_Q = torch.tensor(torch.inf, dtype=torch.float, device=self.device)
 
-        self.init_eta = torch.tensor(init_eta, dtype=torch.float, device=self.device)
         self.delta = delta
         self.found_feasible_solution = False
 

@@ -25,6 +25,7 @@ class GermanCreditData:
             'Age', 'Credit amount', 'Duration'
         ]
         self.explain_columns = self.features.copy()
+        self.feature_names = self.features.copy()
 
         self._load_data()
         self._preprocess()

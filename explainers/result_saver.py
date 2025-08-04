@@ -21,7 +21,7 @@ class ResultSaver:
         self.full_dce_params = {}
         self.full_strategy_params = {}
         
-    def setup_save_directory(self, dataset_name, model_name, strategy, n_proj, delta, U_1, U_2, l, r, max_iter, top_k, seed, gradient_method="cone_sampling"):
+    def setup_save_directory(self, dataset_name, model_name, strategy, n_proj, delta, U_1, U_2, l, r, max_iter, top_k, seed, gradient_method="cone_sampling", num_trials=None):
         """Setup nested directory structure for saving results"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
@@ -51,27 +51,11 @@ class ResultSaver:
         if hasattr(strategy, 'temp_decay'):
             strategy_params.append(f"td={strategy.temp_decay}")
         
-        # ParticleSwarmOptimizationStrategy parameters
-        if hasattr(strategy, 'swarm_size'):
-            strategy_params.append(f"swarm={strategy.swarm_size}")
-        if hasattr(strategy, 'w'):
-            strategy_params.append(f"w={strategy.w}")
-        if hasattr(strategy, 'c1'):
-            strategy_params.append(f"c1={strategy.c1}")
-        if hasattr(strategy, 'c2'):
-            strategy_params.append(f"c2={strategy.c2}")
-        
         # DifferentialEvolutionStrategy parameters
         if hasattr(strategy, 'F'):
             strategy_params.append(f"F={strategy.F}")
         if hasattr(strategy, 'CR'):
             strategy_params.append(f"CR={strategy.CR}")
-        
-        # CovarianceMatrixAdaptationEvolutionStrategy parameters
-        if hasattr(strategy, 'population_size'):
-            strategy_params.append(f"pop={strategy.population_size}")
-        if hasattr(strategy, 'sigma_decay'):
-            strategy_params.append(f"sd={strategy.sigma_decay}")
         
         # Add gradient guidance parameters (if enabled)
         if hasattr(strategy, 'use_gradient_guidance') and strategy.use_gradient_guidance:
@@ -83,10 +67,21 @@ class ResultSaver:
             elif hasattr(strategy, 'noise_beta'):
                 strategy_params.append(f"beta={strategy.noise_beta}")
         
+        # Add new common parameters
+        if hasattr(strategy, 'categorical_step'):
+            strategy_params.append(f"cs={strategy.categorical_step}")
+        if hasattr(strategy, 'continuous_step'):
+            strategy_params.append(f"ct={strategy.continuous_step}")
+        if hasattr(strategy, 'temperature'):
+            strategy_params.append(f"temp={strategy.temperature}")
+        
         strategy_param_str = ",".join(strategy_params) if strategy_params else "default"
         
-        # DCE parameters with abbreviations
-        dce_params = f"np={n_proj},d={delta},u1={U_1},u2={U_2},l={l},r={r},mi={max_iter},tk={top_k}"
+        # DCE parameters with abbreviations - include num_trials if provided, exclude n_proj and delta
+        dce_param_parts = [f"u1={U_1}", f"u2={U_2}", f"l={l}", f"r={r}", f"mi={max_iter}", f"tk={top_k}"]
+        if num_trials is not None:
+            dce_param_parts.append(f"nt={num_trials}")
+        dce_params = ",".join(dce_param_parts)
         
         # Create nested directory structure under Results folder
         # save_path = os.path.join(
@@ -119,9 +114,10 @@ class ResultSaver:
         self.strategy_name = strategy_name
         self.seed = seed
         self.full_dce_params = {
-            'n_proj': n_proj, 'delta': delta, 'U_1': U_1, 'U_2': U_2,
-            'l': l, 'r': r, 'max_iter': max_iter, 'top_k': top_k
+            'U_1': U_1, 'U_2': U_2, 'l': l, 'r': r, 'max_iter': max_iter, 'top_k': top_k
         }
+        if num_trials is not None:
+            self.full_dce_params['num_trials'] = num_trials
         self.full_strategy_params = self._get_strategy_params_dict(strategy)
         
         return save_path
@@ -150,27 +146,11 @@ class ResultSaver:
         if hasattr(strategy, 'temp_decay'):
             params['temp_decay'] = strategy.temp_decay
         
-        # ParticleSwarmOptimizationStrategy parameters
-        if hasattr(strategy, 'swarm_size'):
-            params['swarm_size'] = strategy.swarm_size
-        if hasattr(strategy, 'w'):
-            params['w'] = strategy.w
-        if hasattr(strategy, 'c1'):
-            params['c1'] = strategy.c1
-        if hasattr(strategy, 'c2'):
-            params['c2'] = strategy.c2
-        
         # DifferentialEvolutionStrategy parameters
         if hasattr(strategy, 'F'):
             params['F'] = strategy.F
         if hasattr(strategy, 'CR'):
             params['CR'] = strategy.CR
-        
-        # CovarianceMatrixAdaptationEvolutionStrategy parameters
-        if hasattr(strategy, 'population_size'):
-            params['population_size'] = strategy.population_size
-        if hasattr(strategy, 'sigma_decay'):
-            params['sigma_decay'] = strategy.sigma_decay
         
         # Add gradient guidance parameters (if enabled) - but exclude use_gradient_guidance itself
         if hasattr(strategy, 'use_gradient_guidance') and strategy.use_gradient_guidance:
@@ -181,6 +161,14 @@ class ResultSaver:
                 params['weight_alpha'] = strategy.weight_alpha
             elif hasattr(strategy, 'noise_beta'):
                 params['noise_beta'] = strategy.noise_beta
+        
+        # Add new common parameters
+        if hasattr(strategy, 'categorical_step'):
+            params['categorical_step'] = strategy.categorical_step
+        if hasattr(strategy, 'continuous_step'):
+            params['continuous_step'] = strategy.continuous_step
+        if hasattr(strategy, 'temperature'):
+            params['temperature'] = strategy.temperature
         
         return params
     
@@ -252,15 +240,14 @@ class ResultSaver:
                 'strategy_parameters': self.full_strategy_params,
                 'parameter_abbreviations': {
                     'dce_abbrev': {
-                        'np': 'n_proj', 'd': 'delta', 'u1': 'U_1', 'u2': 'U_2',
-                        'l': 'l', 'r': 'r', 'mi': 'max_iter', 'tk': 'top_k'
+                        'u1': 'U_1', 'u2': 'U_2', 'l': 'l', 'r': 'r', 
+                        'mi': 'max_iter', 'tk': 'top_k', 'nt': 'num_trials'
                     },
                     'strategy_abbrev': {
                         'cp': 'crossover_prob', 'gsp': 'gene_swap_prob', 'mpc': 'mutation_prob_cat',
                         'mpo': 'mutation_prob_cont', 'mns': 'mutation_noise_scale', 'T0': 'T0',
-                        'Tf': 'T_final', 'td': 'temp_decay', 'swarm': 'swarm_size', 'w': 'w',
-                        'c1': 'c1', 'c2': 'c2', 'F': 'F', 'CR': 'CR', 'pop': 'population_size',
-                        'sd': 'sigma_decay', 'angle': 'angle_degrees', 'alpha': 'weight_alpha', 'beta': 'noise_beta'
+                        'Tf': 'T_final', 'td': 'temp_decay', 'F': 'F', 'CR': 'CR', 'angle': 'angle_degrees', 'alpha': 'weight_alpha', 'beta': 'noise_beta',
+                        'cs': 'categorical_step', 'ct': 'continuous_step', 'temp': 'temperature'
                     }
                 }
             }

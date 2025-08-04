@@ -31,7 +31,7 @@ class HotelBookingData:
         ]
         self.continuous_columns = list(set(self.features) - set(self.categorical_columns))
         self.explain_columns = self.features.copy()
-
+        self.feature_names = self.features.copy()
         self._load_data()
         self._preprocess()
         self._split()
