@@ -54,7 +54,7 @@ class HotelBookingData:
 
         for col in self.df.columns:
             if self.df[col].isna().any():
-                self.df[col].fillna(self.df[col].median(), inplace=True)
+                self.df[col] = self.df[col].fillna(self.df[col].median())
 
         self.X = self.df[self.features].copy()
         self.y = self.df[self.target_name]

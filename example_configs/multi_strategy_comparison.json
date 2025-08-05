@@ -1,0 +1,125 @@
+{
+  "experiment_name": "comprehensive_strategy_comparison",
+  
+  "global": {
+    "dataset": "german_credit",
+    "_comment_dataset": "cardio, german_credit, hotel_booking, heloc, compas",
+    
+    "model": "MLP",
+    "_comment_model": "RandomForest, LightGBM, XGBoost, SVM, MLP",
+    
+    "seed": [42, 123, 456, 2025, 24874],
+    "_comment_seed": "42 OR [42, 123, 456]",
+    
+    "save_results": true,
+    
+    "callback": "full",
+    "_comment_callback": "'off' (no logs), 'final_only' (final results), 'full' (all iterations)",
+    
+    "results_dir": "/work3/s232263/DCE_Results",
+    "_comment_results_dir": "Custom Results directory path. null = default 'Results' folder. Example: 'E:/desktop/DCE/test' or '/path/to/custom/results'",
+    
+    "verbose": false
+  },
+  "dce_params": {
+
+    "X_init": false,
+    "U_1": 0.5,
+    "U_2": 0.3,
+    "l": 0.2,
+    "r": 1.0,
+    "max_iter": 100,
+    "num_trials": 10,
+    "top_k": 1
+
+  },
+  "cone_sampling": {
+    "_comment_cone_sampling": "Cone sampling configuration for gradient guidance",
+    
+    "cone_cat": true,
+    "_comment_cone_cat": "true: use cone sampling for categorical features, false: random sampling",
+    
+    "cone_cont": true,
+    "_comment_cone_cont": "true: use cone sampling for continuous features, false: random sampling",
+    
+    "cone_angle": 0.7854,
+    "_comment_cone_angle": "Cone angle in radians. 0.7854 = π/4 = 45°"
+  },
+  "explain_data": {
+    "_comment_explain_data": "Data selection method for generating counterfactual explanations",
+    
+    "method": "standard",
+    "_comment_method": "Available methods: 'standard' (random), 'risk_filter' (by risk level), 'fixed_indices' (specific samples)",
+    "_usage_standard": "For standard: set method='standard', only sample_num needed",
+    "_usage_risk_filter": "For risk_filter: set method='risk_filter', sample_num + risk_filter (0=low, 1=high)",
+    "_usage_fixed_indices": "For fixed_indices: set method='fixed_indices', provide fixed_indices array",
+    
+    "sample_num": 50,
+    "_comment_sample_num": "Number of samples to explain. For fixed_indices: should match array length",
+    
+    "risk_filter": null,
+    "_comment_risk_filter": "For risk_filter method only: 0 (low risk samples) or 1 (high risk samples)",
+    
+    "fixed_indices": null,
+    "_comment_fixed_indices": "[10, 25, 50, 75]"
+  },
+  "strategies": [
+    {
+      "_comment_strategies": "Available: monte_carlo, genetic, simulated_annealing, bayesian, differential_evolution",
+      
+      "name": "monte_carlo",
+      "alias": "mc_demo",
+      "params": {
+        "categorical_step": 1.2,
+        "continuous_step": 0.1,
+        "temperature": 2.0
+      }
+    },
+    {
+      "name": "genetic",
+      "alias": "ga_demo",
+      "params": {
+        "crossover_prob": 0.8,
+        "gene_swap_prob": 0.5,
+        "mutation_prob_cat": 0.3,
+        "mutation_prob_cont": 0.8,
+        "mutation_noise_scale": 0.1,
+        "categorical_step": 1.2,
+        "continuous_step": 0.1,
+        "temperature": 2.0
+      }
+    },
+    {
+      "name": "simulated_annealing",
+      "alias": "sa_demo",
+      "params": {
+        "T0": 1.5,
+        "T_final": 0.01,
+        "temp_decay": null,
+        "categorical_step": 1.2,
+        "continuous_step": 0.1,
+        "temperature": 2.0
+      }
+    },
+    {
+      "name": "bayesian",
+      "alias": "bo_demo",
+      "params": {
+        "categorical_step": 1.2,
+        "continuous_step": 0.1,
+        "temperature": 2.0
+      }
+    },
+    {
+      "name": "differential_evolution",
+      "alias": "de_demo",
+      "params": {
+        "F": 0.5,
+        "CR": 0.9,
+        "categorical_step": 1.2,
+        "continuous_step": 0.1,
+        "temperature": 2.0
+      }
+    }
+  ]
+}

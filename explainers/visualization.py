@@ -161,4 +161,5 @@ class CallbackVisualizer:
         plt.imshow(np.asarray(combined))
         plt.axis("off")
         plt.title("Iteration 0 (Left) vs Final (Right)", fontsize=16)
-        plt.show()
+        # plt.show()  # Commented for Linux compatibility
+        plt.close()

@@ -21,7 +21,7 @@ class ResultSaver:
         self.full_dce_params = {}
         self.full_strategy_params = {}
         
-    def setup_save_directory(self, dataset_name, model_name, strategy, n_proj, delta, U_1, U_2, l, r, max_iter, top_k, seed, gradient_method="cone_sampling", num_trials=None):
+    def setup_save_directory(self, dataset_name, model_name, strategy, n_proj, delta, U_1, U_2, l, r, max_iter, top_k, seed, gradient_method="cone_sampling", num_trials=None, results_dir=None):
         """Setup nested directory structure for saving results"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
@@ -94,7 +94,7 @@ class ResultSaver:
         # )
 
         save_path = os.path.join(
-            "Results",
+            results_dir or "Results",
             dataset_name or "unknown_dataset",
             model_name or "unknown_model", 
             f"DCE_{dce_params}",
