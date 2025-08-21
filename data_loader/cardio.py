@@ -70,7 +70,8 @@ class CardioData:
 
     def get_y_target(self):
         torch.manual_seed(self.random_state)
-        y_target = torch.distributions.Beta(0.2, 0.3).sample((self.sample_num,)).to(torch.float32)
+        # y_target = torch.full((self.sample_num,), 1.0).to(torch.float32)
+        y_target = torch.distributions.Beta(0.1, 0.9).sample((self.sample_num,)).to(torch.float32)
         return y_target
 
     def get_X_init(self):

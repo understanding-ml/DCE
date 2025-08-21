@@ -44,7 +44,11 @@ class BayesianStrategy(GradientGuidanceMixin):
 
             for idx in candidate_indices:
                 bounds = [
-                    Real(float(explainer.X_prime[:, feat].min()), float(explainer.X_prime[:, feat].max()), name=f"x_{feat}")
+                    Real(
+                        float(explainer.X_prime[:, feat].min()) - (1e-6 if float(explainer.X_prime[:, feat].min()) == float(explainer.X_prime[:, feat].max()) else 0),
+                        float(explainer.X_prime[:, feat].max()) + (1e-6 if float(explainer.X_prime[:, feat].min()) == float(explainer.X_prime[:, feat].max()) else 0),
+                        name=f"x_{feat}"
+                    )
                     for feat in explainer.explain_indices
                 ]
 

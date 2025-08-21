@@ -201,9 +201,45 @@ class DCENonDifferentiable(BaseExplainer):
 
             is_feasible = (U_1 - self.Qu_upper) > 0 and (U_2 - self.Qv_upper) > 0
             
+            # Calculate OT distance for iteration tracking (same as demo_new implementation)
+            ot_distance = None
+            if save_results and hasattr(callback, 'mode') and callback.mode == "full":
+                # Use same OT distance calculation as demo_new.ipynb
+                def compute_ot_distance(X_s, X_t):
+                    # Convert to proper tensor format
+                    if isinstance(X_s, torch.Tensor):
+                        X_s_tensor = X_s.float()
+                    elif hasattr(X_s, 'values'):  # pandas DataFrame
+                        X_s_tensor = torch.FloatTensor(X_s.values)
+                    elif isinstance(X_s, np.ndarray):
+                        X_s_tensor = torch.FloatTensor(X_s)
+                    else:
+                        X_s_tensor = torch.FloatTensor(X_s)
+                    
+                    if isinstance(X_t, torch.Tensor):
+                        X_t_tensor = X_t.float()
+                    elif hasattr(X_t, 'values'):  # pandas DataFrame  
+                        X_t_tensor = torch.FloatTensor(X_t.values)
+                    elif isinstance(X_t, np.ndarray):
+                        X_t_tensor = torch.FloatTensor(X_t)
+                    else:
+                        X_t_tensor = torch.FloatTensor(X_t)
+
+                    if X_s_tensor.ndim == 1:
+                        wd = WassersteinDivergence()
+                        distance, _ = wd.distance(X_s_tensor, X_t_tensor, delta=0.1)
+                    else:
+                        swd = SlicedWassersteinDivergence(dim=X_s_tensor.shape[1], n_proj=5000, random_state=seed)
+                        distance, _ = swd.distance(X_s_tensor, X_t_tensor, delta=0.1)
+                    return distance.item()
+                
+                # Calculate OT distance between current counterfactual and factual (standardized data)
+                ot_distance = compute_ot_distance(self.X.detach().cpu(), self.X_prime.detach().cpu())
+                print(f"OT Distance = {ot_distance:.6f}")
+
             # Log iteration data
             if save_results:
-                self.logger_data.append({
+                log_entry = {
                     'iteration': i,
                     'Q': Q.item(),
                     'term1': term1.item(),
@@ -216,7 +252,12 @@ class DCENonDifferentiable(BaseExplainer):
                     'is_feasible': is_feasible,
                     'interval_left': l,
                     'interval_right': r
-                })
+                }
+                # Add OT distance if calculated successfully
+                if ot_distance is not None:
+                    log_entry['OT_distance'] = ot_distance
+                
+                self.logger_data.append(log_entry)
             if is_feasible and Q.item() < getattr(self, "best_Q", float("inf")):
                 self.best_Q = Q.item()
                 self.best_X = self.X.clone().detach()

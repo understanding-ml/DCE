@@ -9,3 +9,15 @@ data/*/logs/*
 __pycache__/
 .claude/
 Results/
+DCE_Results/
+grad_topk/
+hpc_report/
+hpc_scripts/
+mc_gradient_experiments_configs/
+mc_gradient_experiments_scripts/
+metrics_aggregated/
+top_k_experiments_configs/
+top_k_experiments_scripts/
+validation_configs/
+validation_scripts/
+example_configs/

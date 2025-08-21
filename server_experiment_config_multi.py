@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-DCE Server Experiment Script with Configuration File Support
+DCE Server Experiment Script with Multi-Dataset/Model Support
+Extended version supporting multiple datasets and models in a single configuration.
 Automated DCE experiments for server deployment with JSON configuration files.
 """
 
@@ -47,6 +48,9 @@ from scipy.stats import gaussian_kde, entropy
 from numpy.linalg import LinAlgError
 from sklearn.preprocessing import MinMaxScaler
 
+# Visualization imports
+import matplotlib.pyplot as plt
+
 
 def parse_arguments():
     """Parse command line arguments."""
@@ -58,8 +62,8 @@ Configuration File Format:
 {
   "experiment_name": "my_experiment",
   "global": {
-    "dataset": "german_credit",
-    "model": "RandomForest",
+    "dataset": "german_credit",  // Single dataset OR ["german_credit", "heloc"] for multiple
+    "model": "RandomForest",     // Single model OR ["RandomForest", "LightGBM"] for multiple
     "seed": 42,  // Single seed OR [42, 123, 456] for multiple seeds
     "save_results": true,
     "callback": "final_only",
@@ -145,8 +149,8 @@ def default_config():
     return {
         "experiment_name": "dce_experiment",
         "global": {
-            "dataset": "german_credit",
-            "model": "RandomForest",
+            "dataset": "german_credit",  # Can be string or list
+            "model": "RandomForest",     # Can be string or list
             "seed": 42,
             "save_results": True,
             "callback": "final_only",
@@ -234,6 +238,36 @@ def load_and_validate_config(config_path: str, seed_override: int = None) -> Dic
     # Keep original seed field for backward compatibility
     config["global"]["seed"] = config["global"]["seeds"][0]
     
+    # Normalize dataset format (convert single string to list)
+    dataset_value = config["global"]["dataset"]
+    if isinstance(dataset_value, str):
+        config["global"]["datasets"] = [dataset_value]
+    elif isinstance(dataset_value, list):
+        config["global"]["datasets"] = dataset_value
+        # Validate all datasets are strings
+        if not all(isinstance(d, str) for d in dataset_value):
+            raise ValueError("All datasets must be strings")
+    else:
+        raise ValueError("Dataset must be a string or list of strings")
+    
+    # Keep original dataset field for backward compatibility
+    config["global"]["dataset"] = config["global"]["datasets"][0]
+    
+    # Normalize model format (convert single string to list)
+    model_value = config["global"]["model"]
+    if isinstance(model_value, str):
+        config["global"]["models"] = [model_value]
+    elif isinstance(model_value, list):
+        config["global"]["models"] = model_value
+        # Validate all models are strings
+        if not all(isinstance(m, str) for m in model_value):
+            raise ValueError("All models must be strings")
+    else:
+        raise ValueError("Model must be a string or list of strings")
+    
+    # Keep original model field for backward compatibility
+    config["global"]["model"] = config["global"]["models"][0]
+    
     # Validate required fields
     required_fields = {
         "global": ["dataset", "model"],
@@ -255,11 +289,15 @@ def load_and_validate_config(config_path: str, seed_override: int = None) -> Dic
     valid_datasets = ['cardio', 'german_credit', 'hotel_booking', 'heloc', 'compas']
     valid_models = ['RandomForest', 'LightGBM', 'XGBoost', 'SVM', 'MLP']
     
-    if config["global"]["dataset"] not in valid_datasets:
-        raise ValueError(f"Invalid dataset: {config['global']['dataset']}")
+    # Validate all datasets
+    for dataset in config["global"]["datasets"]:
+        if dataset not in valid_datasets:
+            raise ValueError(f"Invalid dataset: {dataset}. Valid datasets: {valid_datasets}")
     
-    if config["global"]["model"] not in valid_models:
-        raise ValueError(f"Invalid model: {config['global']['model']}")
+    # Validate all models
+    for model in config["global"]["models"]:
+        if model not in valid_models:
+            raise ValueError(f"Invalid model: {model}. Valid models: {valid_models}")
     
     # Validate explain_data configuration
     explain_config = config.get("explain_data", {})
@@ -309,8 +347,22 @@ def print_config_summary(config: Dict):
     
     global_config = config["global"]
     print(f"\n🎯 Global Settings:")
-    print(f"   Dataset: {global_config['dataset']}")
-    print(f"   Model: {global_config['model']}")
+    
+    # Display datasets
+    datasets = global_config.get('datasets', [global_config['dataset']])
+    if len(datasets) == 1:
+        print(f"   Dataset: {datasets[0]}")
+    else:
+        print(f"   Datasets: {datasets} ({len(datasets)} datasets)")
+    
+    # Display models
+    models = global_config.get('models', [global_config['model']])
+    if len(models) == 1:
+        print(f"   Model: {models[0]}")
+    else:
+        print(f"   Models: {models} ({len(models)} models)")
+    
+    # Display seeds
     seeds = global_config.get('seeds', [global_config['seed']])
     if len(seeds) == 1:
         print(f"   Seed: {seeds[0]}")
@@ -621,6 +673,21 @@ def calculate_metrics(results_directory: str, model, data):
             print("❌ Required data files not found")
             return {}
         
+        # Check is_feasible status from optimization log
+        is_feasible = False
+        optimization_log_path = os.path.join(results_directory, "optimization_log.csv")
+        if os.path.exists(optimization_log_path):
+            try:
+                log_df = pd.read_csv(optimization_log_path)
+                if 'is_feasible' in log_df.columns:
+                    is_feasible = log_df['is_feasible'].any()  # 只要有一个True就是True
+                print(f"✅ Feasible solution found: {is_feasible}")
+            except Exception as e:
+                print(f"⚠️  Warning: Could not read feasible status: {e}")
+                is_feasible = False
+        else:
+            print("⚠️  Warning: optimization_log.csv not found, is_feasible set to False")
+        
         # Load data
         best_x_standardized = pd.read_csv(best_x_path)
         best_y_df = pd.read_csv(best_y_path)
@@ -663,10 +730,16 @@ def calculate_metrics(results_directory: str, model, data):
         try:
             y_cf = counterfactual_y.flatten()
             y_tgt = y_target.flatten() if len(y_target.shape) > 1 else y_target
-            match_mask = ((y_cf > 0.5) & (y_tgt > 0.5)) | ((y_cf <= 0.5) & (y_tgt <= 0.5))
-            coverage_rate = np.mean(match_mask)
+            
+            # 方法2: 正类比例相似度计算
+            cf_positive_ratio = np.mean(y_cf > 0.5)
+            target_positive_ratio = np.mean(y_tgt > 0.5)
+            coverage_rate = 1 - abs(cf_positive_ratio - target_positive_ratio)
+            
             all_metrics['Coverage Rate'] = coverage_rate
-            print(f"   Coverage Rate: {coverage_rate:.3f}")
+            print(f"   Coverage Rate (正类比例相似度): {coverage_rate:.3f}")
+            print(f"     反事实正类比例: {cf_positive_ratio:.3f} ({cf_positive_ratio*100:.1f}%)")
+            print(f"     目标正类比例: {target_positive_ratio:.3f} ({target_positive_ratio*100:.1f}%)")
         except Exception as e:
             print(f"❌ Error calculating Coverage Rate: {e}")
             all_metrics['Coverage Rate'] = float('nan')
@@ -752,43 +825,318 @@ def calculate_metrics(results_directory: str, model, data):
         except Exception as e:
             print(f"❌ Error calculating Percentile Differences: {e}")
         
-        # Metric 5: AReS Cost
+        # Metric 5: AReS Cost (matching demo_new.ipynb implementation)
         try:
-            def compute_cost(delta, costs_vector):
-                return np.linalg.norm(delta @ np.diag(costs_vector))
-            
-            n_features = counterfactual_X_np_original.shape[1]
-            costs_vector = np.ones(n_features)
-            feature_names = list(counterfactual_X_original.columns)
-            
-            for i, feature_name in enumerate(feature_names):
-                feature_values = factual_X_np_original[:, i]
-                feature_range = np.max(feature_values) - np.min(feature_values)
-                unique_values = np.unique(feature_values)
-                n_unique = len(unique_values)
-                
-                if n_unique <= 10 and np.all(unique_values == unique_values.astype(int)):
-                    costs_vector[i] = 0.5
+            # 1) Build the baseline-heloc style feature cost vector
+            feature_names = list(x_true_standardized.columns)
+            original_factual = x_true_standardized * std_vals + mean_vals
+            cost_list = []
+            for fname in feature_names:
+                values = original_factual[fname].values
+                unique_count = np.unique(values).size
+                ratio = unique_count / len(values)
+                if unique_count <= 10 and ratio < 0.5:
+                    # categorical feature → fixed cost
+                    cost_list.append(0.5)
                 else:
-                    if feature_range > 0:
-                        costs_vector[i] = 1.0 / feature_range
-                    else:
-                        costs_vector[i] = 1.0
-            
-            deltas = counterfactual_X_np_original - factual_X_np_original
-            ares_cost = compute_cost(deltas, costs_vector)
+                    # continuous feature → inverse of the range
+                    val_range = values.max() - values.min()
+                    cost_list.append(1.0 / val_range if val_range > 0 else 1.0)
+            costs_vector = np.array(cost_list)
+
+            # 2) Compute the standardized delta matrix
+            delta = (best_x_standardized - x_true_standardized).values
+
+            # 3) Compute the weighted L2 norm as AReS cost
+            ares_cost = np.linalg.norm(delta @ np.diag(costs_vector))
+
             all_metrics['AReS Cost'] = ares_cost
-            print(f"   AReS Cost: {ares_cost:.3f}")
+            print(f"   AReS Cost: {ares_cost:.6f}")
         except Exception as e:
             print(f"❌ Error calculating AReS Cost: {e}")
             all_metrics['AReS Cost'] = float('nan')
+        
+        # Add is_feasible to metrics
+        all_metrics['is_feasible'] = is_feasible
         
     except Exception as e:
         print(f"❌ Error in metrics calculation: {e}")
         import traceback
         traceback.print_exc()
+        # Ensure is_feasible is always present even on error
+        all_metrics['is_feasible'] = False
     
     return all_metrics
+
+
+def generate_ot_distance_plot(results_directory: str, dataset_name: str, model_name: str, strategy_name: str):
+    """Generate OT Distance evolution visualization (ported from demo_new.ipynb)."""
+    if not results_directory or not os.path.exists(results_directory):
+        print("❌ Results directory not available for OT Distance plotting")
+        return
+    
+    try:
+        # Load optimization log
+        optimization_log_path = os.path.join(results_directory, "optimization_log.csv")
+        
+        if os.path.exists(optimization_log_path):
+            # Read the optimization log
+            log_df = pd.read_csv(optimization_log_path)
+            
+            # Check if OT distance data is available
+            if 'OT_distance' in log_df.columns:
+                print("📊 Creating OT Distance optimization progress visualization...")
+                
+                # Create the plot
+                plt.figure(figsize=(12, 8))
+                
+                # Plot OT Distance values over iterations
+                plt.plot(log_df['iteration'], log_df['OT_distance'], 'g-', linewidth=2, label='OT Distance', alpha=0.7)
+                
+                # Highlight feasible solutions if available
+                if 'is_feasible' in log_df.columns:
+                    feasible_points = log_df[log_df['is_feasible'] == True]
+                    if not feasible_points.empty:
+                        plt.scatter(feasible_points['iteration'], feasible_points['OT_distance'], 
+                                  color='orange', s=50, alpha=0.6, label='Feasible solutions')
+                
+                # Formatting
+                plt.xlabel('Iteration', fontsize=12)
+                plt.ylabel('OT Distance', fontsize=12)
+                plt.title(f'OT Distance Evolution\nDataset: {dataset_name}, Model: {model_name}, Strategy: {strategy_name}', 
+                         fontsize=14, pad=20)
+                plt.grid(True, alpha=0.3)
+                plt.legend()
+                
+                # Add text box with key statistics
+                stats_text = f"OT Distance Statistics:\nTotal iterations: {len(log_df)}\nFinal OT Distance: {log_df['OT_distance'].iloc[-1]:.6f}\nOT range: [{log_df['OT_distance'].min():.6f}, {log_df['OT_distance'].max():.6f}]"
+                
+                plt.text(0.02, 0.98, stats_text, transform=plt.gca().transAxes, 
+                        verticalalignment='top', fontsize=9, 
+                        bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
+                
+                plt.tight_layout()
+                
+                # Prepare save paths
+                max_iter = len(log_df)
+                plot_filename = f"ot_distance_{max_iter}.png"
+                
+                # Save to current working directory
+                current_dir = os.getcwd()
+                plot_path = os.path.join(current_dir, plot_filename)
+                print(f"🗂️ Current working directory: {current_dir}")
+                print(f"📁 Attempting to save OT Distance plot to: {plot_path}")
+                
+                try:
+                    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+                    print(f"✅ Successfully saved OT Distance plot to current directory: {plot_path}")
+                    
+                    # Verify file was created
+                    if os.path.exists(plot_path):
+                        file_size = os.path.getsize(plot_path)
+                        print(f"📄 File verified: {plot_filename} ({file_size} bytes)")
+                    else:
+                        print(f"❌ File not found after saving: {plot_path}")
+                        
+                except Exception as save_error:
+                    print(f"❌ Error saving OT Distance plot to current directory: {save_error}")
+                
+                # Save to results directory
+                if results_directory and os.path.exists(results_directory):
+                    results_plot_path = os.path.join(results_directory, plot_filename)
+                    print(f"📁 Attempting to save to results directory: {results_plot_path}")
+                    
+                    try:
+                        plt.savefig(results_plot_path, dpi=300, bbox_inches='tight')
+                        print(f"✅ Successfully saved OT Distance plot to results directory: {results_plot_path}")
+                        
+                        # Verify file was created
+                        if os.path.exists(results_plot_path):
+                            file_size = os.path.getsize(results_plot_path)
+                            print(f"📄 File verified in results: {plot_filename} ({file_size} bytes)")
+                        else:
+                            print(f"❌ File not found in results directory: {results_plot_path}")
+                            
+                    except Exception as save_error:
+                        print(f"❌ Error saving OT Distance plot to results directory: {save_error}")
+                else:
+                    print(f"❌ Results directory not accessible: {results_directory}")
+                
+                # Show the plot (commented out for server environment)
+                # plt.show()
+                
+                print(f"📈 OT Distance plot details:")
+                print(f"   Total iterations: {len(log_df)}")
+                print(f"   Final OT Distance: {log_df['OT_distance'].iloc[-1]:.6f}")
+                if len(log_df) > 1:
+                    print(f"   OT Distance change: {log_df['OT_distance'].iloc[-1] - log_df['OT_distance'].iloc[0]:.6f}")
+                
+                # List files in current directory to verify
+                try:
+                    current_files = [f for f in os.listdir(current_dir) if f.startswith('ot_distance_') and f.endswith('.png')]
+                    if current_files:
+                        print(f"🔍 Found OT Distance plot files in current directory: {current_files}")
+                    else:
+                        print(f"🔍 No OT Distance plot files found in current directory")
+                except Exception as list_error:
+                    print(f"❌ Error listing current directory: {list_error}")
+                
+                # Close the figure to free memory
+                plt.close()
+                
+            else:
+                print("📊 OT Distance data not available in optimization log")
+                print("   Note: OT Distance tracking requires callback='full' mode")
+                
+        else:
+            print(f"❌ Optimization log not found: {optimization_log_path}")
+            
+    except Exception as e:
+        print(f"❌ Error creating OT Distance optimization plot: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def generate_q_optimization_plot(results_directory: str, dataset_name: str, model_name: str, strategy_name: str):
+    """Generate Q optimization progress visualization (ported from demo_new.ipynb)."""
+    if not results_directory or not os.path.exists(results_directory):
+        print("❌ Results directory not available for plotting")
+        return
+    
+    try:
+        # Load optimization log
+        optimization_log_path = os.path.join(results_directory, "optimization_log.csv")
+        
+        if os.path.exists(optimization_log_path):
+            # Read the optimization log
+            log_df = pd.read_csv(optimization_log_path)
+            
+            print("📊 Creating Q optimization progress visualization...")
+            
+            # Create the plot
+            plt.figure(figsize=(12, 8))
+            
+            # Plot Q values over iterations
+            plt.plot(log_df['iteration'], log_df['Q'], 'b-', linewidth=2, label='Q value', alpha=0.7)
+            
+            # Find and highlight the best Q value
+            best_q_idx = log_df['Q'].idxmin()
+            best_q_value = log_df.loc[best_q_idx, 'Q']
+            best_iteration = log_df.loc[best_q_idx, 'iteration']
+            
+            plt.scatter(best_iteration, best_q_value, color='red', s=100, zorder=5, 
+                       label=f'Best Q: {best_q_value:.6f} (iter {best_iteration})')
+            
+            # Highlight feasible solutions if available
+            if 'is_feasible' in log_df.columns:
+                feasible_points = log_df[log_df['is_feasible'] == True]
+                if not feasible_points.empty:
+                    plt.scatter(feasible_points['iteration'], feasible_points['Q'], 
+                              color='green', s=50, alpha=0.6, label='Feasible solutions')
+            
+            # Formatting
+            plt.xlabel('Iteration', fontsize=12)
+            plt.ylabel('Q Value', fontsize=12)
+            plt.title(f'DCE Optimization Progress\nDataset: {dataset_name}, Model: {model_name}, Strategy: {strategy_name}', 
+                     fontsize=14, pad=20)
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+            
+            # Add annotation for best point
+            plt.annotate(f'Best Q: {best_q_value:.4f}', 
+                        xy=(best_iteration, best_q_value), 
+                        xytext=(best_iteration + len(log_df) * 0.1, best_q_value + (log_df['Q'].max() - log_df['Q'].min()) * 0.1),
+                        arrowprops=dict(arrowstyle='->', color='red', alpha=0.7),
+                        fontsize=10, color='red')
+            
+            # Add text box with key statistics
+            stats_text = f"""Statistics:
+Total iterations: {len(log_df)}
+Best Q: {best_q_value:.6f}
+Best iteration: {best_iteration}
+Final Q: {log_df['Q'].iloc[-1]:.6f}
+Q range: [{log_df['Q'].min():.6f}, {log_df['Q'].max():.6f}]"""
+            
+            plt.text(0.02, 0.98, stats_text, transform=plt.gca().transAxes, 
+                    verticalalignment='top', fontsize=9, 
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+            
+            plt.tight_layout()
+            
+            # Prepare save paths
+            max_iter = len(log_df)
+            plot_filename = f"best_Q_{max_iter}.png"
+            
+            # Save to current working directory
+            current_dir = os.getcwd()
+            plot_path = os.path.join(current_dir, plot_filename)
+            print(f"🗂️ Current working directory: {current_dir}")
+            print(f"📁 Attempting to save plot to: {plot_path}")
+            
+            try:
+                plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+                print(f"✅ Successfully saved to current directory: {plot_path}")
+                
+                # Verify file was created
+                if os.path.exists(plot_path):
+                    file_size = os.path.getsize(plot_path)
+                    print(f"📄 File verified: {plot_filename} ({file_size} bytes)")
+                else:
+                    print(f"❌ File not found after saving: {plot_path}")
+                    
+            except Exception as save_error:
+                print(f"❌ Error saving to current directory: {save_error}")
+            
+            # Save to results directory
+            if results_directory and os.path.exists(results_directory):
+                results_plot_path = os.path.join(results_directory, plot_filename)
+                print(f"📁 Attempting to save to results directory: {results_plot_path}")
+                
+                try:
+                    plt.savefig(results_plot_path, dpi=300, bbox_inches='tight')
+                    print(f"✅ Successfully saved to results directory: {results_plot_path}")
+                    
+                    # Verify file was created
+                    if os.path.exists(results_plot_path):
+                        file_size = os.path.getsize(results_plot_path)
+                        print(f"📄 File verified in results: {plot_filename} ({file_size} bytes)")
+                    else:
+                        print(f"❌ File not found in results directory: {results_plot_path}")
+                        
+                except Exception as save_error:
+                    print(f"❌ Error saving to results directory: {save_error}")
+            else:
+                print(f"❌ Results directory not accessible: {results_directory}")
+            
+            # Show the plot (commented out for server environment)
+            # plt.show()
+            
+            print(f"📈 Plot details:")
+            print(f"   Total iterations: {len(log_df)}")
+            print(f"   Best Q value: {best_q_value:.6f} at iteration {best_iteration}")
+            print(f"   Final Q value: {log_df['Q'].iloc[-1]:.6f}")
+            print(f"   Q improvement: {log_df['Q'].iloc[0] - best_q_value:.6f}")
+            
+            # List files in current directory to verify
+            try:
+                current_files = [f for f in os.listdir(current_dir) if f.startswith('best_Q_') and f.endswith('.png')]
+                if current_files:
+                    print(f"🔍 Found Q plot files in current directory: {current_files}")
+                else:
+                    print(f"🔍 No Q plot files found in current directory")
+            except Exception as list_error:
+                print(f"❌ Error listing current directory: {list_error}")
+            
+            # Close the figure to free memory
+            plt.close()
+            
+        else:
+            print(f"❌ Optimization log not found: {optimization_log_path}")
+            
+    except Exception as e:
+        print(f"❌ Error creating Q optimization plot: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def run_single_seed_experiment(config: Dict, seed: int):
@@ -895,6 +1243,12 @@ def run_single_seed_experiment(config: Dict, seed: int):
                 # Calculate comprehensive metrics
                 metrics = calculate_metrics(results_directory, model, data)
                 
+                # Generate Q optimization plot
+                generate_q_optimization_plot(results_directory, dataset_name, model_name, strategy_name)
+                
+                # Generate OT Distance optimization plot
+                generate_ot_distance_plot(results_directory, dataset_name, model_name, strategy_name)
+                
                 # Store results
                 all_results[alias] = {
                     'strategy_name': strategy_name,
@@ -917,7 +1271,7 @@ def run_single_seed_experiment(config: Dict, seed: int):
                         for k, v in metrics.items():
                             if isinstance(v, np.ndarray):
                                 metrics_for_json[k] = v.tolist()
-                            elif isinstance(v, (np.integer, np.floating)):
+                            elif isinstance(v, (np.integer, np.floating, np.bool_)):
                                 metrics_for_json[k] = v.item()
                             else:
                                 metrics_for_json[k] = v
@@ -984,88 +1338,136 @@ def run_single_seed_experiment(config: Dict, seed: int):
 
 
 def run_experiment(config: Dict):
-    """Run complete DCE experiments for all seeds in configuration."""
+    """Run complete DCE experiments for all dataset-model-seed combinations in configuration."""
     print_config_summary(config)
     
     global_config = config["global"] 
+    datasets = global_config["datasets"]
+    models = global_config["models"]
     seeds = global_config["seeds"]
     
-    # Results storage for all seeds
-    all_seeds_results = {}
+    # Results storage for all combinations
+    all_combinations_results = {}
     
     print(f"\n{'='*80}")
-    print(f"🎯 Multi-Seed Experiment Setup")
+    print(f"🎯 Multi-Dataset/Model/Seed Experiment Setup")
     print(f"{'='*80}")
-    print(f"📊 Total seeds to process: {len(seeds)}")
-    print(f"🎲 Seeds: {seeds}")
-    print(f"📈 Strategies per seed: {len(config['strategies'])}")
-    print(f"📊 Total experiments: {len(seeds) * len(config['strategies'])}")
+    print(f"📊 Datasets to process: {len(datasets)} - {datasets}")
+    print(f"🤖 Models to process: {len(models)} - {models}")
+    print(f"🎲 Seeds to process: {len(seeds)} - {seeds}")
+    print(f"📈 Strategies per combination: {len(config['strategies'])}")
+    total_combinations = len(datasets) * len(models) * len(seeds)
+    total_experiments = total_combinations * len(config['strategies'])
+    print(f"📊 Total combinations: {total_combinations}")
+    print(f"📊 Total experiments: {total_experiments}")
     
-    for i, seed in enumerate(seeds):
-        print(f"\n{'='*80}")
-        print(f"🎲 SEED {i+1}/{len(seeds)}: {seed}")
-        print(f"{'='*80}")
-        
-        try:
-            # Run experiment for this seed
-            seed_results = run_single_seed_experiment(config, seed)
-            all_seeds_results[f"seed_{seed}"] = {
-                'seed': seed,
-                'results': seed_results
-            }
-            print(f"✅ Seed {seed} completed successfully!")
-            
-        except Exception as e:
-            print(f"❌ Error in seed {seed}: {e}")
-            import traceback
-            traceback.print_exc()
-            all_seeds_results[f"seed_{seed}"] = {
-                'seed': seed,
-                'error': str(e)
-            }
+    combination_count = 0
     
-    # Print multi-seed summary
+    for dataset in datasets:
+        for model in models:
+            for i, seed in enumerate(seeds):
+                combination_count += 1
+                
+                print(f"\n{'='*80}")
+                print(f"🎯 COMBINATION {combination_count}/{total_combinations}")
+                print(f"📊 Dataset: {dataset}")
+                print(f"🤖 Model: {model}")
+                print(f"🎲 Seed: {seed}")
+                print(f"{'='*80}")
+                
+                # Create a temporary config for this specific combination
+                temp_config = config.copy()
+                temp_config["global"] = global_config.copy()
+                temp_config["global"]["dataset"] = dataset
+                temp_config["global"]["model"] = model
+                temp_config["global"]["seed"] = seed
+                temp_config["global"]["seeds"] = [seed]
+                temp_config["global"]["datasets"] = [dataset]
+                temp_config["global"]["models"] = [model]
+                
+                # Update experiment name to include combination info
+                original_name = config.get('experiment_name', 'dce_experiment')
+                temp_config["experiment_name"] = f"{original_name}_{dataset}_{model}_seed{seed}"
+                
+                combination_key = f"{dataset}_{model}_seed_{seed}"
+                
+                try:
+                    # Run experiment for this combination
+                    combination_results = run_single_seed_experiment(temp_config, seed)
+                    all_combinations_results[combination_key] = {
+                        'dataset': dataset,
+                        'model': model,
+                        'seed': seed,
+                        'results': combination_results
+                    }
+                    print(f"✅ Combination {dataset}-{model}-{seed} completed successfully!")
+                    
+                except Exception as e:
+                    print(f"❌ Error in combination {dataset}-{model}-{seed}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    all_combinations_results[combination_key] = {
+                        'dataset': dataset,
+                        'model': model,
+                        'seed': seed,
+                        'error': str(e)
+                    }
+    
+    # Print multi-combination summary
     print(f"\n{'='*80}")
-    print("📈 MULTI-SEED EXPERIMENT SUMMARY")
+    print("📈 MULTI-DATASET/MODEL/SEED EXPERIMENT SUMMARY")
     print(f"{'='*80}")
     print(f"🎯 Experiment: {config.get('experiment_name', 'Unnamed')}")
-    print(f"📊 Dataset: {global_config['dataset']}, Model: {global_config['model']}")
-    print(f"🎲 Seeds processed: {len(seeds)}")
+    print(f"📊 Datasets: {datasets}")
+    print(f"🤖 Models: {models}")
+    print(f"🎲 Seeds: {seeds}")
+    print(f"📊 Total combinations processed: {combination_count}")
     
-    # Summary statistics across seeds
-    successful_seeds = sum(1 for result in all_seeds_results.values() if 'error' not in result)
-    failed_seeds = len(seeds) - successful_seeds
+    # Summary statistics across all combinations
+    successful_combinations = sum(1 for result in all_combinations_results.values() if 'error' not in result)
+    failed_combinations = combination_count - successful_combinations
     
-    print(f"✅ Successful seeds: {successful_seeds}/{len(seeds)}")
-    if failed_seeds > 0:
-        print(f"❌ Failed seeds: {failed_seeds}/{len(seeds)}")
+    print(f"✅ Successful combinations: {successful_combinations}/{combination_count}")
+    if failed_combinations > 0:
+        print(f"❌ Failed combinations: {failed_combinations}/{combination_count}")
     
-    # Strategy performance across seeds
-    if successful_seeds > 0:
-        print(f"\n📊 Strategy Performance Summary:")
+    # Performance summary by dataset and model
+    if successful_combinations > 0:
+        print(f"\n📊 Performance Summary by Dataset:")
+        for dataset in datasets:
+            dataset_results = [r for k, r in all_combinations_results.items() if r.get('dataset') == dataset and 'error' not in r]
+            print(f"   📊 {dataset}: {len(dataset_results)}/{len(models) * len(seeds)} combinations successful")
+        
+        print(f"\n🤖 Performance Summary by Model:")
+        for model in models:
+            model_results = [r for k, r in all_combinations_results.items() if r.get('model') == model and 'error' not in r]
+            print(f"   🤖 {model}: {len(model_results)}/{len(datasets) * len(seeds)} combinations successful")
+        
+        print(f"\n📈 Strategy Performance Across All Combinations:")
         for strategy_config in config["strategies"]:
             alias = strategy_config["alias"]
             strategy_name = strategy_config["name"]
             
-            # Collect metrics across successful seeds
+            # Collect metrics across all successful combinations
             best_qs = []
             feasible_counts = 0
             
-            for seed_data in all_seeds_results.values():
-                if 'error' not in seed_data and alias in seed_data['results']:
-                    result = seed_data['results'][alias]
-                    if 'error' not in result:
-                        if 'best_Q' in result:
-                            best_qs.append(result['best_Q'])
-                        if result.get('found_feasible_solution', False):
-                            feasible_counts += 1
+            for combination_data in all_combinations_results.values():
+                if 'error' not in combination_data and 'results' in combination_data:
+                    if alias in combination_data['results']:
+                        result = combination_data['results'][alias]
+                        if 'error' not in result:
+                            if 'best_Q' in result:
+                                best_qs.append(result['best_Q'])
+                            if result.get('found_feasible_solution', False):
+                                feasible_counts += 1
             
             if best_qs:
                 print(f"   🎯 {strategy_name.upper()} ({alias}):")
                 print(f"     Best Q - Mean: {np.mean(best_qs):.6f}, Std: {np.std(best_qs):.6f}")
-                print(f"     Feasible solutions: {feasible_counts}/{successful_seeds}")
+                print(f"     Feasible solutions: {feasible_counts}/{successful_combinations}")
     
-    return all_seeds_results
+    return all_combinations_results
 
 
 def create_example_config():
