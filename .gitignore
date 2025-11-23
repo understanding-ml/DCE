@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# exp
+Results/
+DCE_Results/
+baseline_results/
+full_experiment_results_*/
+topk_results/
+ml_models/
+
+# server
+ablation_configs/
+ablation_scripts/
+top_k_experiments_configs/
+top_k_experiments_scripts/
+validation_configs/
+validation_scripts/
+
+# fig
+*.png
+*.jpg
+*.jpeg
+*.pdf
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude Code
+.claude/
+
+# data
+datasets/
+data/
+
+.DS_Store
+Thumbs.db
