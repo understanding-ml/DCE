@@ -1,0 +1,78 @@
+{
+  "experiment_name": "Exp",
+  "_comment_experiment": "Exp",
+  "global": {
+    "dataset": [
+      "cardio",
+      "hotel_booking"
+    ],
+    "model": [
+      "RandomForest",
+      "LightGBM",
+      "XGBoost",
+      "SVM",
+      "MLP"
+    ],
+    "_comment_model": "All 5 models",
+    "seed": [
+      91
+    ],
+    "_comment_seed": "Single seed",
+    "save_results": true,
+    "results_dir": "./exp",
+    "verbose": false
+  },
+  "dce_params": {
+    "X_init": false,
+    "U_1": 0.8,
+    "U_2": 0.5,
+    "l": 0.2,
+    "r": 1.0,
+    "max_iter": 100,
+    "num_trials": 200,
+    "top_k": 3
+  },
+  "cone_sampling": {
+    "cone_cat": true,
+    "_comment_cone_cat": "Categorical cone sampling: True",
+    "cone_cont": true,
+    "_comment_cone_cont": "Continuous cone sampling: True",
+    "cone_angle": 0.7854,
+    "_comment_cone_angle": "Cone angle in radians. 0.7854 = \u03c0/4 = 45\u00b0"
+  },
+  "explain_data": {
+    "method": "standard",
+    "sample_num": 50,
+    "risk_filter": 0,
+    "fixed_indices": null
+  },
+  "strategies": [
+    {
+      "_comment_strategies": "Monte Carlo and Genetic Algorithm",
+      "name": "monte_carlo",
+      "alias": "mc_cardio",
+      "params": {
+        "categorical_step": 1.2,
+        "continuous_step": 0.1,
+        "temperature": 2.0,
+        "h": 3
+      }
+    },
+    {
+      "name": "genetic",
+      "alias": "ga_cardio",
+      "params": {
+        "crossover_prob": 0.8,
+        "gene_swap_prob": 0.5,
+        "mutation_prob_cat": 0.3,
+        "mutation_prob_cont": 0.8,
+        "mutation_noise_scale": 0.1,
+        "categorical_step": 1.2,
+        "continuous_step": 0.1,
+        "temperature": 2.0,
+        "h": 3
+      }
+    }
+  ]
+}
+
